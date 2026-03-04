@@ -562,7 +562,7 @@ static ngx_int_t ngx_nsoc_script_add_copy_code(
     }
 
     code->code =
-            (ngx_nsoc_script_code_pt) ngx_nsoc_script_copy_len_code;
+            (ngx_nsoc_script_code_pt) (void *) ngx_nsoc_script_copy_len_code;
     code->len = len;
 
     size = (sizeof(ngx_nsoc_script_copy_code_t) + len + sizeof(uintptr_t)
@@ -650,7 +650,7 @@ static ngx_int_t ngx_nsoc_script_add_var_code(
     }
 
     code->code =
-            (ngx_nsoc_script_code_pt) ngx_nsoc_script_copy_var_len_code;
+            (ngx_nsoc_script_code_pt) (void *) ngx_nsoc_script_copy_var_len_code;
     code->index = (uintptr_t) index;
 
     code = ngx_nsoc_script_add_code(
@@ -736,7 +736,7 @@ static ngx_int_t ngx_nsoc_script_add_capture_code(
     }
 
     code->code =
-            (ngx_nsoc_script_code_pt) ngx_nsoc_script_copy_capture_len_code;
+            (ngx_nsoc_script_code_pt) (void *) ngx_nsoc_script_copy_capture_len_code;
     code->n = 2 * n;
 
     code = ngx_nsoc_script_add_code(
@@ -825,7 +825,7 @@ static ngx_int_t ngx_nsoc_script_add_full_name_code(
     }
 
     code->code =
-            (ngx_nsoc_script_code_pt) ngx_nsoc_script_full_name_len_code;
+            (ngx_nsoc_script_code_pt) (void *) ngx_nsoc_script_full_name_len_code;
     code->conf_prefix = sc->conf_prefix;
 
     code = ngx_nsoc_script_add_code(

@@ -762,6 +762,7 @@ static ngx_int_t ngx_nsoc_do_handshake_process(ngx_connection_t *c,
 
                 *hp = NGX_NSOC_HANDSHAKE_PROCESS_PHASE;
                 nc->last = 0;
+                /* fall through */
 
             case NGX_NSOC_HANDSHAKE_PROCESS_PHASE:
 
