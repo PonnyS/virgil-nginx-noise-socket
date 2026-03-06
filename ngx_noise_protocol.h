@@ -81,6 +81,14 @@ ngx_int_t ngx_noise_protocol_build_prologue(ngx_pool_t *pool,
 ngx_int_t ngx_noise_protocol_match_header(
         const ngx_noise_protocol_t *noise_protocol,
         const noise_handshake_first_hdr_t *header);
+/* ngx_noise_protocol_requires_local_keypair 判断当前角色是否必须提供本端静态私钥。 */
+ngx_int_t ngx_noise_protocol_requires_local_keypair(
+        const ngx_noise_protocol_t *noise_protocol, ngx_noise_role_e noise_role,
+        ngx_flag_t *required);
+/* ngx_noise_protocol_requires_remote_public_key 判断当前角色是否必须预置对端静态公钥。 */
+ngx_int_t ngx_noise_protocol_requires_remote_public_key(
+        const ngx_noise_protocol_t *noise_protocol, ngx_noise_role_e noise_role,
+        ngx_flag_t *required);
 /* ngx_noise_protocol_init_handshake 用配置好的 suite 和 prologue 初始化握手状态。 */
 ngx_int_t ngx_noise_protocol_init_handshake(NOISE_CTX *noise_ctx,
         noise_protocol_conn_t *noise_conn,

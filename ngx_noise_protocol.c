@@ -5,6 +5,32 @@
 
 #include "ngx_noise_protocol.h"
 
+typedef struct {
+    int pattern_id;
+    ngx_flag_t client_needs_local_keypair;
+    ngx_flag_t server_needs_local_keypair;
+    ngx_flag_t client_needs_remote_public_key;
+    ngx_flag_t server_needs_remote_public_key;
+} ngx_noise_pattern_capability_t;
+
+static ngx_noise_pattern_capability_t ngx_noise_pattern_capabilities[] = {
+    { NOISE_PATTERN_N, 0, 1, 1, 0 },
+    { NOISE_PATTERN_X, 1, 1, 1, 0 },
+    { NOISE_PATTERN_K, 1, 1, 1, 1 },
+    { NOISE_PATTERN_NN, 0, 0, 0, 0 },
+    { NOISE_PATTERN_NK, 0, 1, 1, 0 },
+    { NOISE_PATTERN_NX, 0, 1, 0, 0 },
+    { NOISE_PATTERN_XN, 1, 0, 0, 0 },
+    { NOISE_PATTERN_XK, 1, 1, 1, 0 },
+    { NOISE_PATTERN_XX, 1, 1, 0, 0 },
+    { NOISE_PATTERN_KN, 1, 0, 0, 1 },
+    { NOISE_PATTERN_KK, 1, 1, 1, 1 },
+    { NOISE_PATTERN_KX, 1, 1, 0, 1 },
+    { NOISE_PATTERN_IN, 1, 0, 0, 0 },
+    { NOISE_PATTERN_IK, 1, 1, 1, 0 },
+    { NOISE_PATTERN_IX, 1, 1, 0, 0 },
+};
+
 /* ngx_noise_protocol_next_field 按下划线切分协议名字段。 */
 static ngx_int_t ngx_noise_protocol_next_field(const ngx_str_t *name,
         size_t *offset, ngx_str_t *field, ngx_flag_t is_last)
@@ -49,12 +75,30 @@ static ngx_int_t ngx_noise_protocol_dh_key_len(int dh_id, size_t *key_len)
     }
 }
 
+/* ngx_noise_protocol_get_pattern_capability 返回基础握手模式的能力定义。 */
+static ngx_int_t ngx_noise_protocol_get_pattern_capability(int pattern_id,
+        const ngx_noise_pattern_capability_t **capability)
+{
+    size_t i;
+
+    for (i = 0; i < sizeof(ngx_noise_pattern_capabilities)
+            / sizeof(ngx_noise_pattern_capabilities[0]); ++i) {
+        if (ngx_noise_pattern_capabilities[i].pattern_id == pattern_id) {
+            *capability = &ngx_noise_pattern_capabilities[i];
+            return NGX_OK;
+        }
+    }
+
+    return NGX_ERROR;
+}
+
 /* ngx_noise_protocol_parse 解析并校验配置中的 Noise suite。 */
 ngx_int_t ngx_noise_protocol_parse(ngx_noise_protocol_t *noise_protocol,
         const ngx_str_t *name, const ngx_str_t *prologue)
 {
     size_t offset;
     int prefix_id, pattern_id, dh_id, cipher_id, hash_id;
+    const ngx_noise_pattern_capability_t *pattern_capability;
     ngx_str_t field;
 
     if (noise_protocol == NULL || name == NULL || prologue == NULL) {
@@ -79,9 +123,11 @@ ngx_int_t ngx_noise_protocol_parse(ngx_noise_protocol_t *noise_protocol,
     }
     pattern_id = noise_name_to_id(NOISE_PATTERN_CATEGORY,
             (const char *) field.data, field.len);
-    if (pattern_id != NOISE_PATTERN_XX) {
+    if (ngx_noise_protocol_get_pattern_capability(pattern_id,
+            &pattern_capability) != NGX_OK) {
         return NGX_ERROR;
     }
+    pattern_id = pattern_capability->pattern_id;
 
     if (ngx_noise_protocol_next_field(name, &offset, &field, 0) != NGX_OK) {
         return NGX_ERROR;
@@ -185,6 +231,64 @@ ngx_int_t ngx_noise_protocol_match_header(
     }
 
     return NGX_OK;
+}
+
+/* ngx_noise_protocol_requires_local_keypair 判断当前角色是否必须提供本端静态私钥。 */
+ngx_int_t ngx_noise_protocol_requires_local_keypair(
+        const ngx_noise_protocol_t *noise_protocol, ngx_noise_role_e noise_role,
+        ngx_flag_t *required)
+{
+    const ngx_noise_pattern_capability_t *pattern_capability;
+
+    if (noise_protocol == NULL || required == NULL) {
+        return NGX_ERROR;
+    }
+
+    if (ngx_noise_protocol_get_pattern_capability(
+            noise_protocol->protocol_id.pattern_id, &pattern_capability)
+            != NGX_OK) {
+        return NGX_ERROR;
+    }
+
+    switch (noise_role) {
+        case NGX_NSOC_CLIENT_ROLE:
+            *required = pattern_capability->client_needs_local_keypair;
+            return NGX_OK;
+        case NGX_NSOC_SERVER_ROLE:
+            *required = pattern_capability->server_needs_local_keypair;
+            return NGX_OK;
+        default:
+            return NGX_ERROR;
+    }
+}
+
+/* ngx_noise_protocol_requires_remote_public_key 判断当前角色是否必须预置对端静态公钥。 */
+ngx_int_t ngx_noise_protocol_requires_remote_public_key(
+        const ngx_noise_protocol_t *noise_protocol, ngx_noise_role_e noise_role,
+        ngx_flag_t *required)
+{
+    const ngx_noise_pattern_capability_t *pattern_capability;
+
+    if (noise_protocol == NULL || required == NULL) {
+        return NGX_ERROR;
+    }
+
+    if (ngx_noise_protocol_get_pattern_capability(
+            noise_protocol->protocol_id.pattern_id, &pattern_capability)
+            != NGX_OK) {
+        return NGX_ERROR;
+    }
+
+    switch (noise_role) {
+        case NGX_NSOC_CLIENT_ROLE:
+            *required = pattern_capability->client_needs_remote_public_key;
+            return NGX_OK;
+        case NGX_NSOC_SERVER_ROLE:
+            *required = pattern_capability->server_needs_remote_public_key;
+            return NGX_OK;
+        default:
+            return NGX_ERROR;
+    }
 }
 
 /* ngx_noise_protocol_init_handshake 用配置好的 suite 和 prologue 初始化握手状态。 */
