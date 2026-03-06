@@ -18,6 +18,8 @@ typedef struct {
 
         ngx_str_t server_private_key_file;
         ngx_str_t client_public_key_file;
+        ngx_str_t noise_protocol;
+        ngx_str_t noise_prologue;
 
 } ngx_nsoc_noiseserver_conf_t;
 

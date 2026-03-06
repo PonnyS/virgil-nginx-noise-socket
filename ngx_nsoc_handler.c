@@ -132,8 +132,11 @@ ngx_int_t ngx_nsoc_create_connection(ngx_noise_t *noise, ngx_connection_t *c,
 
     nc->handshake_phase = NGX_NSOC_HANDSHAKE_NONE_PHASE;
     nc->last = 0;
-
-	nc->prologue = &noise->prologue;
+    nc->protocol = noise->protocol;
+    if (ngx_noise_protocol_build_prologue(c->pool, &nc->protocol, &nc->prologue,
+            &nc->prologue_len) != NGX_OK) {
+        return NGX_ERROR;
+    }
 
 	if (flags & NGX_NSOC_CLIENT) {
         nc->noise_role = NGX_NSOC_CLIENT_ROLE;
@@ -466,9 +469,9 @@ static ngx_int_t ngx_nsoc_handshake_start_action_write_message(ngx_connection_t 
 
             size = NGX_NSOC_1MSG_NEG_DATA_SIZE + 2*NGX_NSOC_LEN_FIELD_SIZE;
 
-            memcpy(b->pos, &nc->prologue->header_len,
-                    sizeof(noise_handshake_first_hdr_t)
-                            + NGX_NSOC_LEN_FIELD_SIZE);
+            *(uint16_t *) (&b->pos[0]) = swapw(NGX_NSOC_1MSG_NEG_DATA_SIZE);
+            ngx_memcpy(&b->pos[2], &nc->protocol.header,
+                    sizeof(noise_handshake_first_hdr_t));
 
             nc->msg_num = NGX_NSOC_2MSG_OK;
 
@@ -653,7 +656,6 @@ static ngx_int_t ngx_nsoc_do_handshake_process(ngx_connection_t *c,
     ssize_t n, size;
     ngx_int_t action = 0;
     NoiseBuffer mbuf;
-    noise_prologue_data_t *prologue_data;
     noise_handshake_first_hdr_t *first_hdr;
 
     hp = &nc->handshake_phase;
@@ -674,7 +676,8 @@ static ngx_int_t ngx_nsoc_do_handshake_process(ngx_connection_t *c,
 
                 	first_hdr = (noise_handshake_first_hdr_t *)nc->buf->start;
 
-                	if(first_hdr->version_id != NGX_NSOC_VERSION_ID){
+                    if (ngx_noise_protocol_match_header(&nc->protocol, first_hdr)
+                            != NGX_OK) {
                 		nc->msg_num = NGX_NSOC_2MSG_ERR;
                 		n = ngx_nsoc_handshake_start_action_write_message(c, nc, &b,
                 				&mbuf);
@@ -725,17 +728,11 @@ static ngx_int_t ngx_nsoc_do_handshake_process(ngx_connection_t *c,
                 		return NGX_ERROR;
                 	}
 
-                	nc->prologue->header.cipher_id = first_hdr->cipher_id;
-                	nc->prologue->header.dh_id = first_hdr->dh_id;
-                	nc->prologue->header.hash_id = first_hdr->hash_id;
-                	nc->prologue->header.pattern_id = first_hdr->pattern_id;
-                	nc->prologue->header.version_id = first_hdr->version_id;
                 }
 
-            	prologue_data = nc->prologue;
-
                 n = ngx_noise_protocol_init_handshake(
-                        nc->noise_ctx, &nc->noise_connection, prologue_data, nc->noise_role);
+                        nc->noise_ctx, &nc->noise_connection, &nc->protocol,
+                        nc->prologue, nc->prologue_len, nc->noise_role);
 
                 if (nc->buf != NULL) {
                 	ngx_pfree(c->pool, nc->buf->start);
