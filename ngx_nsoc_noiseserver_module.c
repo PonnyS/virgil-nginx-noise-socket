@@ -45,7 +45,21 @@ static ngx_command_t ngx_nsoc_noiseserver_commands[] =
     offsetof(ngx_nsoc_noiseserver_conf_t, client_public_key_file),
     NULL },
 
-	ngx_null_command
+  { ngx_string("noise_protocol"),
+    NGX_NSOC_MAIN_CONF | NGX_NSOC_SRV_CONF | NGX_CONF_TAKE1,
+    ngx_conf_set_str_slot,
+    NGX_NSOC_SRV_CONF_OFFSET,
+    offsetof(ngx_nsoc_noiseserver_conf_t, noise_protocol),
+    NULL },
+
+  { ngx_string("noise_prologue"),
+    NGX_NSOC_MAIN_CONF | NGX_NSOC_SRV_CONF | NGX_CONF_TAKE1,
+    ngx_conf_set_str_slot,
+    NGX_NSOC_SRV_CONF_OFFSET,
+    offsetof(ngx_nsoc_noiseserver_conf_t, noise_prologue),
+    NULL },
+
+		ngx_null_command
 };
 
 static ngx_nsoc_module_t ngx_nsoc_noiseserver_module_ctx =
@@ -81,7 +95,7 @@ static ngx_int_t ngx_nsoc_noiseserver_handler(ngx_nsoc_session_t *s)
     ngx_int_t rv;
     ngx_connection_t *c;
     ngx_nsoc_noiseserver_conf_t *noisecf;
-    ngx_array_t *private_key, *public_key;
+    ngx_array_t *private_key;
     ngx_str_t *key;
     ngx_nsoc_core_main_conf_t *cmcf;
 
@@ -93,6 +107,13 @@ static ngx_int_t ngx_nsoc_noiseserver_handler(ngx_nsoc_session_t *s)
     noisecf = ngx_nsoc_get_module_srv_conf(s, ngx_nsoc_noiseserver_module);
 
     cmcf = ngx_nsoc_get_module_main_conf(s, ngx_nsoc_core_module);
+
+    if (noisecf->noise->protocol.name.len == 0) {
+        ngx_log_error(NGX_LOG_EMERG, c->log, 0,
+                      "noise_protocol is not set");
+
+        return NGX_ERROR;
+    }
 
     if(noisecf->noise->ctx->private_keys == NULL) {
         if (noisecf->server_private_key_file.len == 0){
@@ -120,24 +141,14 @@ static ngx_int_t ngx_nsoc_noiseserver_handler(ngx_nsoc_session_t *s)
     }
 
     if (noisecf->noise->ctx->public_keys == NULL) {
-		if (noisecf->client_public_key_file.len != 0) {
-			public_key = ngx_array_create(cmcf->pool, 1, sizeof(ngx_str_t));
-			key = public_key->elts;
-			key->len = NOISE_PROTOCOL_CURVE25519_KEY_LEN;
-			key->data = ngx_pnalloc(cmcf->pool,
-					NOISE_PROTOCOL_CURVE25519_KEY_LEN);
-			if (ngx_noise_protocol_load_public_key(
-					noisecf->client_public_key_file.data, key->data,
-					NOISE_PROTOCOL_CURVE25519_KEY_LEN) != NGX_OK) {
-	            ngx_log_error(NGX_LOG_EMERG, c->log, 0,
-	                          "unable to open client public key file %s",noisecf->client_public_key_file.data);
+        if (noisecf->client_public_key_file.len != 0) {
+            ngx_log_error(NGX_LOG_EMERG, c->log, 0,
+                          "client_public_key_file is not allowed for %V",
+                          &noisecf->noise->protocol.name);
 
-	            return NGX_ERROR;
-			}
-			public_key->nelts = 1;
-			noisecf->noise->ctx->public_keys = public_key;
-		}
-	}
+            return NGX_ERROR;
+        }
+    }
 
     if (s->server_noise_connection == NULL) {
         c->log->action = "NOISE handshaking";
@@ -253,6 +264,10 @@ ngx_nsoc_noiseserver_merge_conf(ngx_conf_t *cf, void *parent, void *child)
             conf->server_private_key_file, prev->server_private_key_file, "");
     ngx_conf_merge_str_value(
             conf->client_public_key_file, prev->client_public_key_file, "");
+    ngx_conf_merge_str_value(
+            conf->noise_protocol, prev->noise_protocol, "");
+    ngx_conf_merge_str_value(
+            conf->noise_prologue, prev->noise_prologue, "NoiseSocketInit1");
 
     conf->noise = ngx_pcalloc(cf->pool, sizeof(ngx_noise_t));
     if (conf->noise == NULL) {
@@ -261,8 +276,22 @@ ngx_nsoc_noiseserver_merge_conf(ngx_conf_t *cf, void *parent, void *child)
 
     conf->noise->log = cf->log;
     conf->noise->handshake_timeout = conf->handshake_timeout;
-    memcpy( conf->noise->prologue.strPrologue,"NoiseSocketInit1",16);
-    conf->noise->prologue.header_len = swapw(NGX_NSOC_1MSG_NEG_DATA_SIZE);
+    conf->noise->prologue_text = conf->noise_prologue;
+
+    if (conf->noise_protocol.len != 0) {
+        if (ngx_noise_protocol_parse_name(
+                &conf->noise_protocol, &conf->noise->protocol) != NGX_OK) {
+            ngx_log_error(NGX_LOG_EMERG, cf->log, 0,
+                          "invalid noise protocol %V", &conf->noise_protocol);
+            return NGX_CONF_ERROR ;
+        }
+
+        if (ngx_noise_protocol_init_prologue(cf->pool,
+                &conf->noise_prologue, &conf->noise->protocol,
+                &conf->noise->prologue) != NGX_OK) {
+            return NGX_CONF_ERROR ;
+        }
+    }
 
     cscf = ngx_nsoc_conf_get_module_srv_conf(cf, ngx_nsoc_core_module);
 

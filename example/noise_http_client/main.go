@@ -22,16 +22,21 @@ import (
 )
 
 const (
-	noisePrologueText     = "NoiseSocketInit1"
-	noiseNegotiationLen   = 6
-	noiseVersionID        = 1
-	noiseDHCurve25519ID   = 1
-	noiseCipherAESGCMID   = 2
-	noiseHashBLAKE2bID    = 2
-	noisePatternXXID      = 9
-	noiseFrameLengthBytes = 2
-	noiseKeySize          = 32
-	maxPlainFrameSize     = 65517
+	defaultNoiseProtocol    = "Noise_NK_25519_AESGCM_SHA256"
+	defaultNoisePrologue    = "NoiseSocketInit1"
+	noiseNegotiationLen     = 6
+	noiseVersionID          = 1
+	noiseDHCurve25519ID     = 1
+	noiseCipherChaChaPolyID = 1
+	noiseCipherAESGCMID     = 2
+	noiseHashBLAKE2sID      = 1
+	noiseHashBLAKE2bID      = 2
+	noiseHashSHA256ID       = 3
+	noiseHashSHA512ID       = 4
+	noisePatternNKID        = 5
+	noiseFrameLengthBytes   = 2
+	noiseKeySize            = 32
+	maxPlainFrameSize       = 65517
 
 	websocketGUID = "258EAFA5-E914-47DA-95CA-C5AB0DC85B11"
 )
@@ -42,6 +47,19 @@ type protocolHeader struct {
 	CipherID  byte
 	HashID    byte
 	PatternID byte
+}
+
+type noiseProtocolSpec struct {
+	Name   string
+	Header protocolHeader
+	Cipher noise.CipherFunc
+	Hash   noise.HashFunc
+}
+
+type noiseHandshakeConfig struct {
+	Protocol     noiseProtocolSpec
+	PrologueText string
+	ServerPubKey []byte
 }
 
 type noiseConn struct {
@@ -180,38 +198,96 @@ func (c *noiseConn) readPayloadFrame() ([]byte, error) {
 	return out, nil
 }
 
-// dialNoiseConn 建立 TCP 连接并完成 Noise XX 握手，返回可直接读写明文的连接。
-func dialNoiseConn(addr string, privateKeyPath string, timeout time.Duration) (*noiseConn, error) {
-	privateKey, err := loadClientPrivateKey(privateKeyPath)
+// parseNoiseProtocol 解析形如 Noise_NK_25519_AESGCM_SHA256 的协议串。
+func parseNoiseProtocol(protocol string) (noiseProtocolSpec, error) {
+	parts := strings.Split(protocol, "_")
+	if len(parts) != 5 || parts[0] != "Noise" {
+		return noiseProtocolSpec{}, fmt.Errorf("invalid noise protocol: %s", protocol)
+	}
+
+	if parts[1] != "NK" {
+		return noiseProtocolSpec{}, fmt.Errorf("unsupported handshake pattern: %s", parts[1])
+	}
+
+	if parts[2] != "25519" {
+		return noiseProtocolSpec{}, fmt.Errorf("unsupported dh: %s", parts[2])
+	}
+
+	spec := noiseProtocolSpec{
+		Name: protocol,
+		Header: protocolHeader{
+			VersionID: noiseVersionID,
+			DHID:      noiseDHCurve25519ID,
+			PatternID: noisePatternNKID,
+		},
+	}
+
+	switch parts[3] {
+	case "AESGCM":
+		spec.Header.CipherID = noiseCipherAESGCMID
+		spec.Cipher = noise.CipherAESGCM
+	case "ChaChaPoly":
+		spec.Header.CipherID = noiseCipherChaChaPolyID
+		spec.Cipher = noise.CipherChaChaPoly
+	default:
+		return noiseProtocolSpec{}, fmt.Errorf("unsupported cipher: %s", parts[3])
+	}
+
+	switch parts[4] {
+	case "SHA256":
+		spec.Header.HashID = noiseHashSHA256ID
+		spec.Hash = noise.HashSHA256
+	case "SHA512":
+		spec.Header.HashID = noiseHashSHA512ID
+		spec.Hash = noise.HashSHA512
+	case "BLAKE2b":
+		spec.Header.HashID = noiseHashBLAKE2bID
+		spec.Hash = noise.HashBLAKE2b
+	case "BLAKE2s":
+		spec.Header.HashID = noiseHashBLAKE2sID
+		spec.Hash = noise.HashBLAKE2s
+	default:
+		return noiseProtocolSpec{}, fmt.Errorf("unsupported hash: %s", parts[4])
+	}
+
+	return spec, nil
+}
+
+// buildInitiatorHandshakeConfig 构造 NK 发起方的握手配置。
+func buildInitiatorHandshakeConfig(spec noiseProtocolSpec, prologueText string, serverPublicKey []byte) (noise.Config, error) {
+	if len(serverPublicKey) != noiseKeySize {
+		return noise.Config{}, fmt.Errorf("invalid server public key size: got %d want %d", len(serverPublicKey), noiseKeySize)
+	}
+
+	prologue, err := buildNoisePrologue(prologueText, spec.Header)
+	if err != nil {
+		return noise.Config{}, err
+	}
+
+	serverPublicKeyCopy := make([]byte, len(serverPublicKey))
+	copy(serverPublicKeyCopy, serverPublicKey)
+
+	return noise.Config{
+		CipherSuite: noise.NewCipherSuite(noise.DH25519, spec.Cipher, spec.Hash),
+		Pattern:     noise.HandshakeNK,
+		Initiator:   true,
+		PeerStatic:  serverPublicKeyCopy,
+		Prologue:    prologue,
+	}, nil
+}
+
+// dialNoiseConn 建立 TCP 连接并完成 Noise NK 握手，返回可直接读写明文的连接。
+func dialNoiseConn(addr string, config noiseHandshakeConfig, timeout time.Duration) (*noiseConn, error) {
+	handshakeConfig, err := buildInitiatorHandshakeConfig(
+		config.Protocol,
+		config.PrologueText,
+		config.ServerPubKey,
+	)
 	if err != nil {
 		return nil, err
 	}
 
-	clientStaticKey, err := buildClientStaticKeypair(privateKey)
-	if err != nil {
-		return nil, err
-	}
-
-	header := protocolHeader{
-		VersionID: noiseVersionID,
-		DHID:      noiseDHCurve25519ID,
-		CipherID:  noiseCipherAESGCMID,
-		HashID:    noiseHashBLAKE2bID,
-		PatternID: noisePatternXXID,
-	}
-
-	prologue, err := buildNoisePrologue(header)
-	if err != nil {
-		return nil, err
-	}
-
-	handshakeState, err := noise.NewHandshakeState(noise.Config{
-		CipherSuite:   noise.NewCipherSuite(noise.DH25519, noise.CipherAESGCM, noise.HashBLAKE2b),
-		Pattern:       noise.HandshakeXX,
-		Initiator:     true,
-		StaticKeypair: clientStaticKey,
-		Prologue:      prologue,
-	})
+	handshakeState, err := noise.NewHandshakeState(handshakeConfig)
 	if err != nil {
 		return nil, fmt.Errorf("create handshake state failed: %w", err)
 	}
@@ -226,7 +302,7 @@ func dialNoiseConn(addr string, privateKeyPath string, timeout time.Duration) (*
 		return nil, fmt.Errorf("set handshake deadline failed: %w", err)
 	}
 
-	sendCipher, recvCipher, err := performNoiseHandshake(rawConn, handshakeState, header)
+	sendCipher, recvCipher, err := performNoiseHandshake(rawConn, handshakeState, config.Protocol.Header)
 	if err != nil {
 		rawConn.Close()
 		return nil, err
@@ -244,7 +320,7 @@ func dialNoiseConn(addr string, privateKeyPath string, timeout time.Duration) (*
 	}, nil
 }
 
-// performNoiseHandshake 执行 1->2->3 三次握手消息交换，并产出双向 CipherState。
+// performNoiseHandshake 执行 NK 的 1->2 两次握手消息交换，并产出双向 CipherState。
 func performNoiseHandshake(conn net.Conn, state *noise.HandshakeState, header protocolHeader) (*noise.CipherState, *noise.CipherState, error) {
 	firstHandshakeMsg, _, _, err := state.WriteMessage(nil, nil)
 	if err != nil {
@@ -263,16 +339,9 @@ func performNoiseHandshake(conn net.Conn, state *noise.HandshakeState, header pr
 	if err := validateSecondNegotiationData(secondNegotiationData); err != nil {
 		return nil, nil, err
 	}
-	if _, _, _, err := state.ReadMessage(nil, secondHandshakeMsg); err != nil {
-		return nil, nil, fmt.Errorf("read handshake payload #2 failed: %w", err)
-	}
-
-	thirdHandshakeMsg, sendCipher, recvCipher, err := state.WriteMessage(nil, nil)
+	_, sendCipher, recvCipher, err := state.ReadMessage(nil, secondHandshakeMsg)
 	if err != nil {
-		return nil, nil, fmt.Errorf("write handshake message #3 failed: %w", err)
-	}
-	if err := writeHandshakeFrame(conn, nil, thirdHandshakeMsg); err != nil {
-		return nil, nil, fmt.Errorf("send handshake message #3 failed: %w", err)
+		return nil, nil, fmt.Errorf("read handshake payload #2 failed: %w", err)
 	}
 
 	if sendCipher == nil || recvCipher == nil {
@@ -283,8 +352,8 @@ func performNoiseHandshake(conn net.Conn, state *noise.HandshakeState, header pr
 }
 
 // doHTTPGetOverNoise 使用 Noise 连接发送一个 HTTP GET 请求并返回响应。
-func doHTTPGetOverNoise(addr string, privateKeyPath string, host string, path string, timeout time.Duration) (string, []byte, error) {
-	conn, err := dialNoiseConn(addr, privateKeyPath, timeout)
+func doHTTPGetOverNoise(addr string, handshakeConfig noiseHandshakeConfig, host string, path string, timeout time.Duration) (string, []byte, error) {
+	conn, err := dialNoiseConn(addr, handshakeConfig, timeout)
 	if err != nil {
 		return "", nil, err
 	}
@@ -315,8 +384,8 @@ func doHTTPGetOverNoise(addr string, privateKeyPath string, host string, path st
 }
 
 // doWebSocketEchoOverNoise 在 Noise 连接上完成 WS 升级、发送文本并读取回显。
-func doWebSocketEchoOverNoise(addr string, privateKeyPath string, host string, path string, message string, timeout time.Duration) (string, string, error) {
-	conn, err := dialNoiseConn(addr, privateKeyPath, timeout)
+func doWebSocketEchoOverNoise(addr string, handshakeConfig noiseHandshakeConfig, host string, path string, message string, timeout time.Duration) (string, string, error) {
+	conn, err := dialNoiseConn(addr, handshakeConfig, timeout)
 	if err != nil {
 		return "", "", err
 	}
@@ -386,43 +455,53 @@ func doWebSocketEchoOverNoise(addr string, privateKeyPath string, host string, p
 	}
 }
 
-// loadClientPrivateKey 从文件加载客户端私钥（32 字节原始二进制）。
-func loadClientPrivateKey(path string) ([]byte, error) {
+// loadRawX25519Key 从文件加载 32 字节原始 X25519 密钥。
+func loadRawX25519Key(path string) ([]byte, error) {
 	key, err := os.ReadFile(path)
 	if err != nil {
-		return nil, fmt.Errorf("read private key file failed: %w", err)
+		return nil, fmt.Errorf("read key file failed: %w", err)
 	}
 	if len(key) != noiseKeySize {
-		return nil, fmt.Errorf("invalid private key size: got %d want %d", len(key), noiseKeySize)
+		return nil, fmt.Errorf("invalid key size: got %d want %d", len(key), noiseKeySize)
 	}
 	return key, nil
 }
 
-// buildClientStaticKeypair 基于 32 字节 X25519 私钥构造 Noise 静态密钥对。
-func buildClientStaticKeypair(privateKey []byte) (noise.DHKey, error) {
+// deriveX25519PublicKey 基于 32 字节 X25519 私钥推导公钥。
+func deriveX25519PublicKey(privateKey []byte) ([]byte, error) {
 	curve := ecdh.X25519()
 	key, err := curve.NewPrivateKey(privateKey)
 	if err != nil {
-		return noise.DHKey{}, fmt.Errorf("build x25519 private key failed: %w", err)
+		return nil, fmt.Errorf("build x25519 private key failed: %w", err)
 	}
 
-	privateCopy := make([]byte, len(privateKey))
-	copy(privateCopy, privateKey)
-
-	return noise.DHKey{
-		Private: privateCopy,
-		Public:  key.PublicKey().Bytes(),
-	}, nil
+	publicKey := key.PublicKey().Bytes()
+	publicKeyCopy := make([]byte, len(publicKey))
+	copy(publicKeyCopy, publicKey)
+	return publicKeyCopy, nil
 }
 
-// buildNoisePrologue 构造与 nginx noise 模块一致的 24 字节 prologue。
-func buildNoisePrologue(header protocolHeader) ([]byte, error) {
-	if len(noisePrologueText) != 16 {
-		return nil, fmt.Errorf("invalid prologue text length: %d", len(noisePrologueText))
+// resolveServerPublicKey 解析服务端静态公钥，优先使用显式公钥文件，其次允许从 demo 私钥推导。
+func resolveServerPublicKey(publicKeyPath string, demoPrivateKeyPath string) ([]byte, error) {
+	if publicKeyPath != "" {
+		return loadRawX25519Key(publicKeyPath)
 	}
 
-	prologue := make([]byte, 0, 24)
-	prologue = append(prologue, []byte(noisePrologueText)...)
+	if demoPrivateKeyPath == "" {
+		return nil, errors.New("server public key is required")
+	}
+
+	privateKey, err := loadRawX25519Key(demoPrivateKeyPath)
+	if err != nil {
+		return nil, err
+	}
+	return deriveX25519PublicKey(privateKey)
+}
+
+// buildNoisePrologue 构造与 nginx noise 模块一致的 prologue。
+func buildNoisePrologue(prologueText string, header protocolHeader) ([]byte, error) {
+	prologue := make([]byte, 0, len(prologueText)+2+noiseNegotiationLen)
+	prologue = append(prologue, []byte(prologueText)...)
 
 	negLen := make([]byte, 2)
 	binary.BigEndian.PutUint16(negLen, noiseNegotiationLen)
@@ -675,20 +754,42 @@ func formatBodyPreview(body []byte) string {
 }
 
 func main() {
-	defaultKeyPath := "/root/ponny/nginx-1.16.1/virgil-nginx-noise-socket/example/client_key_25519"
+	defaultServerPrivateKeyPath := "/root/ponny/nginx-1.16.1/virgil-nginx-noise-socket/example/server_key_25519"
 
 	addr := flag.String("addr", "127.0.0.1:4430", "noise socket 服务地址")
 	host := flag.String("host", "localhost", "HTTP/WS Host 头")
-	privateKeyPath := flag.String("key", defaultKeyPath, "客户端私钥文件路径（32字节二进制）")
+	protocolName := flag.String("protocol", defaultNoiseProtocol, "Noise 协议串，例如 Noise_NK_25519_AESGCM_SHA256")
+	prologueText := flag.String("prologue", defaultNoisePrologue, "Noise prologue 文本")
+	serverPublicKeyPath := flag.String("server-pub", "", "服务端静态公钥文件路径（32字节二进制）")
+	serverDemoPrivateKeyPath := flag.String("server-private-demo", defaultServerPrivateKeyPath, "仅本地 demo 使用：从服务端私钥推导静态公钥")
 	timeout := flag.Duration("timeout", 15*time.Second, "每个请求超时时间")
 	wsMessage := flag.String("ws-message", "hello over noise", "发送到 /ws/echo 的文本消息")
 	flag.Parse()
 
+	protocol, err := parseNoiseProtocol(*protocolName)
+	if err != nil {
+		fmt.Fprintf(os.Stderr, "解析协议失败: %v\n", err)
+		os.Exit(1)
+	}
+
+	serverPublicKey, err := resolveServerPublicKey(*serverPublicKeyPath, *serverDemoPrivateKeyPath)
+	if err != nil {
+		fmt.Fprintf(os.Stderr, "加载服务端公钥失败: %v\n", err)
+		os.Exit(1)
+	}
+
+	handshakeConfig := noiseHandshakeConfig{
+		Protocol:     protocol,
+		PrologueText: *prologueText,
+		ServerPubKey: serverPublicKey,
+	}
+
 	fmt.Printf("目标 Noise 服务: %s\n", *addr)
-	fmt.Printf("客户端私钥: %s\n", *privateKeyPath)
+	fmt.Printf("Noise 协议: %s\n", protocol.Name)
+	fmt.Printf("Noise prologue: %s\n", *prologueText)
 	fmt.Println("开始请求 /api/echo ...")
 
-	apiStatus, apiBody, err := doHTTPGetOverNoise(*addr, *privateKeyPath, *host, "/api/echo", *timeout)
+	apiStatus, apiBody, err := doHTTPGetOverNoise(*addr, handshakeConfig, *host, "/api/echo", *timeout)
 	if err != nil {
 		fmt.Fprintf(os.Stderr, "请求 /api/echo 失败: %v\n", err)
 		os.Exit(1)
@@ -696,7 +797,7 @@ func main() {
 	fmt.Printf("[/api/echo] status=%s body=%s\n", apiStatus, formatBodyPreview(apiBody))
 
 	fmt.Println("开始请求 /ws/echo ...")
-	wsStatus, wsReply, err := doWebSocketEchoOverNoise(*addr, *privateKeyPath, *host, "/ws/echo", *wsMessage, *timeout)
+	wsStatus, wsReply, err := doWebSocketEchoOverNoise(*addr, handshakeConfig, *host, "/ws/echo", *wsMessage, *timeout)
 	if err != nil {
 		fmt.Fprintf(os.Stderr, "请求 /ws/echo 失败: %v\n", err)
 		os.Exit(1)
@@ -704,7 +805,7 @@ func main() {
 	fmt.Printf("[/ws/echo] status=%s send=%q recv=%q\n", wsStatus, *wsMessage, wsReply)
 
 	fmt.Println("开始请求 /download/dl ...")
-	downloadStatus, downloadBody, err := doHTTPGetOverNoise(*addr, *privateKeyPath, *host, "/download/dl", *timeout)
+	downloadStatus, downloadBody, err := doHTTPGetOverNoise(*addr, handshakeConfig, *host, "/download/dl", *timeout)
 	if err != nil {
 		fmt.Fprintf(os.Stderr, "请求 /download/dl 失败: %v\n", err)
 		os.Exit(1)
