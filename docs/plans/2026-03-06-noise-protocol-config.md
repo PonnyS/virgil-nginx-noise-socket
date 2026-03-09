@@ -1,147 +1,147 @@
-# Noise Protocol Config Implementation Plan
+# Noise 多模式协议支持实施计划
 
 > **For Claude:** REQUIRED SUB-SKILL: Use superpowers:executing-plans to implement this plan task-by-task.
 
-**Goal:** 为 nginx noise 模块增加 `Noise_NK_25519_*_*` 协议串配置和可配置 `prologue`，并同步更新示例客户端与文档。
+**目标：** 为 nginx noise 模块增加 12 个交互模式的协议串配置与按模式 key 校验，并同步更新 Go 示例客户端与文档。
 
-**Architecture:** 在 Noise 协议层增加协议规格解析与动态 prologue 构造；在连接层改为维护连接级握手快照，消除服务端共享可变 `prologue`；在代理端和服务端新增配置指令并按 `NK` 做密钥校验。
+**架构：** 在协议层引入模式元数据表统一描述 pattern id 和双端 key 需求；代理端和服务端只按 `spec` 做校验与加载；Go 示例客户端改成模式驱动并支持 2 消息、3 消息握手。
 
-**Tech Stack:** C / nginx module API / noise-c / Go example client
+**技术栈：** C / nginx module API / noise-c / Go / flynn-noise
 
 ---
 
-### Task 1: 协议规格与最小测试
+### Task 1：补红 Go 单测并锁定模式矩阵
 
 **Files:**
-- Create: `docs/plans/2026-03-06-noise-protocol-config-design.md`
-- Create: `example/noise_http_client/main_test.go`
+- Modify: `example/noise_http_client/main_test.go`
 - Modify: `example/noise_http_client/main.go`
 
-**Step 1: Write the failing test**
+**Step 1: 写失败用例**
 
-为 Go 示例补最小单测，覆盖：
-- 解析 `Noise_NK_25519_AESGCM_SHA256`
-- 拒绝 `Noise_XX_25519_AESGCM_BLAKE2b`
-- 使用配置化 `prologue` 构造握手前缀
+覆盖：
 
-**Step 2: Run test to verify it fails**
+- 12 个交互模式协议串解析
+- 拒绝 `N/K/X`
+- 不同模式对 initiator static / responder static 的 key 需求
+- `XX` 三消息握手可以走通
 
-Run: `go test ./example/noise_http_client -run 'Test(ParseNoiseProtocol|BuildNoisePrologue)'`
+**Step 2: 跑红**
 
-Expected: FAIL，提示协议解析函数或配置化 `prologue` 能力不存在。
+Run: `go test ./... -run 'Test(ParseNoiseProtocol|BuildInitiatorHandshakeConfig|PerformNoiseHandshakeSupportsThreeMessagePatterns)'`
 
-**Step 3: Write minimal implementation**
+Expected: FAIL，暴露当前仅支持 `NK` 和固定 2 消息握手的问题。
 
-在 Go 示例中补：
-- 协议串解析
-- `NK` 协议到 `flynn/noise` 的映射
-- 可配置 `prologue`
+**Step 3: 最小实现**
 
-**Step 4: Run test to verify it passes**
+在 Go 示例中增加：
 
-Run: `go test ./example/noise_http_client -run 'Test(ParseNoiseProtocol|BuildNoisePrologue)'`
+- 模式表
+- initiator 本地 static 私钥构造
+- responder 远端 static 公钥按需加载
+- 通用 initiator 握手循环
+
+**Step 4: 跑绿**
+
+Run: `go test ./... -run 'Test(ParseNoiseProtocol|BuildInitiatorHandshakeConfig|PerformNoiseHandshakeSupportsThreeMessagePatterns)'`
 
 Expected: PASS
 
-### Task 2: nginx 配置层
+### Task 2：扩展 C 侧协议规格
+
+**Files:**
+- Modify: `ngx_noise_protocol.h`
+- Modify: `ngx_noise_protocol.c`
+
+**Step 1: 修改协议规格结构**
+
+在 `ngx_noise_protocol_spec_t` 中补：
+
+- client 是否需要 local private
+- client 是否需要 remote public
+- server 是否需要 local private
+- server 是否需要 remote public
+
+**Step 2: 改协议解析**
+
+把 `ngx_noise_protocol_parse_name()` 从只识别 `NK` 改成按模式表识别：
+
+- `NN/KN/NK/KK/NX/KX/XN/IN/XK/IK/XX/IX`
+- 拒绝 `N/K/X`
+
+**Step 3: 改需求判断**
+
+让 `ngx_noise_protocol_needs_local_private_key()` / `ngx_noise_protocol_needs_remote_public_key()` 直接读取 `spec`，不再写死 `NK`。
+
+**Step 4: 最小校验**
+
+Run: `clang -fsyntax-only ...` 或环境允许范围内的等价语法检查。
+
+Expected: 无新增语法错误；若环境缺 nginx 头文件，记录真实失败原因。
+
+### Task 3：让 nginx 配置层按模式加载 key
 
 **Files:**
 - Modify: `ngx_nsoc_proxy_module.c`
 - Modify: `ngx_nsoc_noiseserver_module.c`
-- Modify: `ngx_nsoc_noiseserver_module.h`
-- Modify: `ngx_nsoc_handler.h`
-- Modify: `ngx_noise_protocol.h`
 
-**Step 1: Write the failing test**
+**Step 1: 修改代理端**
 
-补 Go 侧单测用例，约束 `NK` 的密钥要求：
-- 代理端需要 `server_public_key_file`
-- 服务端需要 `server_private_key_file`
+在 `ngx_nsoc_proxy_set_noiselink()` 中：
 
-**Step 2: Run test to verify it fails**
+- initiator 需要 remote static 时要求 `server_public_key_file`
+- initiator 需要 local static 时要求 `client_private_key_file`
+- 多余 key 指令直接报错
 
-Run: `go test ./example/noise_http_client -run 'TestNoiseProtocolNKRequirements'`
+**Step 2: 修改服务端**
 
-Expected: FAIL，说明当前规则仍是旧的固定密钥模型。
+在 `ngx_nsoc_noiseserver_handler()` 中：
 
-**Step 3: Write minimal implementation**
+- responder 需要 local static 时要求 `server_private_key_file`
+- responder 需要 remote static 时要求 `client_public_key_file`
+- 多余 key 指令直接报错
 
-在 nginx 配置层增加：
-- `proxy_noise_protocol`
-- `proxy_noise_prologue`
-- `noise_protocol`
-- `noise_prologue`
+**Step 3: 保持握手循环不扩分支**
 
-并把必填校验改成按 `NK` 规则执行。
+继续复用现有 action 驱动握手循环，不新增每模式专用分支。
 
-**Step 4: Run test to verify it passes**
+**Step 4: 人工核对**
 
-Run: `go test ./example/noise_http_client -run 'TestNoiseProtocolNKRequirements'`
+检查 `NN`、`NK`、`XX`、`KX` 四类代表性模式的 key 规则是否与设计矩阵一致。
 
-Expected: PASS
-
-### Task 3: 连接级握手快照与服务端严格校验
-
-**Files:**
-- Modify: `ngx_nsoc_handler.c`
-- Modify: `ngx_nsoc_handler.h`
-- Modify: `ngx_noise_protocol.c`
-- Modify: `ngx_noise_protocol.h`
-
-**Step 1: Write the failing test**
-
-为 Go 示例补用例，验证：
-- 首包 negotiation header 必须与配置协议一致
-- `prologue` 由 `prologue text + header_len + header` 组成
-
-**Step 2: Run test to verify it fails**
-
-Run: `go test ./example/noise_http_client -run 'TestNegotiationHeaderMatchesConfiguredProtocol'`
-
-Expected: FAIL，说明现有逻辑仍依赖硬编码或不做严格匹配。
-
-**Step 3: Write minimal implementation**
-
-在 C 侧实现：
-- 连接级握手数据快照
-- 首包协议严格校验
-- 动态 prologue buffer 传递给 `noise_handshakestate_set_prologue()`
-
-**Step 4: Run test to verify it passes**
-
-Run: `go test ./example/noise_http_client -run 'TestNegotiationHeaderMatchesConfiguredProtocol'`
-
-Expected: PASS
-
-### Task 4: 文档、示例与最终验证
+### Task 4：同步文档与示例
 
 **Files:**
 - Modify: `README.md`
-- Modify: `ci/nginx_configs/nginx-noise-lb-int.conf`
-- Modify: `ci/nginx_configs/nginx-noise-backend-int.conf`
+- Modify: `docs/plans/2026-03-06-noise-protocol-config-design.md`
+- Modify: `docs/plans/2026-03-06-noise-protocol-config.md`
 - Modify: `example/noise_http_client/main.go`
-- Test: `example/noise_http_client/main_test.go`
 
-**Step 1: Run focused tests**
+**Step 1: 更新 README**
 
-Run: `go test ./example/noise_http_client`
+明确：
 
-Expected: PASS
+- 支持的 12 个交互模式
+- 不支持 `N/K/X`
+- `client-priv` / `server-pub` 的模式依赖关系
 
-**Step 2: Run broader verification**
+**Step 2: 更新设计文档**
 
-Run: `go test ./...`
+把原来“只支持 `NK`”的描述替换为多模式版本。
 
-Expected: 若仓库 Go 侧仅示例目录可测试，则至少示例目录通过；如 `./...` 不可运行，记录真实失败原因。
+**Step 3: 更新实施计划**
 
-**Step 3: Update docs**
+保证计划和代码现状一致。
 
-补 README 与 CI 配置示例，明确支持：
-- `Noise_NK_25519_{AESGCM|ChaChaPoly}_{SHA256|SHA512|BLAKE2b|BLAKE2s}`
-- `noise_prologue` / `proxy_noise_prologue`
+**Step 4: 最终验证**
 
-**Step 4: Final verification**
+Run:
 
-Run: `git diff --stat`
+- `go test ./...`
+- `git diff --check`
+- `git diff --stat`
 
-Expected: 仅包含本次协议配置化相关变更。
+Expected:
+
+- Go 单测通过
+- diff 无空白错误
+- 变更集中在协议多模式支持相关文件

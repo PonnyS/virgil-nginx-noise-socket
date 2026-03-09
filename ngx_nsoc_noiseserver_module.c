@@ -96,6 +96,7 @@ static ngx_int_t ngx_nsoc_noiseserver_handler(ngx_nsoc_session_t *s)
     ngx_connection_t *c;
     ngx_nsoc_noiseserver_conf_t *noisecf;
     ngx_array_t *private_key;
+    ngx_array_t *public_key;
     ngx_str_t *key;
     ngx_nsoc_core_main_conf_t *cmcf;
 
@@ -115,39 +116,73 @@ static ngx_int_t ngx_nsoc_noiseserver_handler(ngx_nsoc_session_t *s)
         return NGX_ERROR;
     }
 
-    if(noisecf->noise->ctx->private_keys == NULL) {
-        if (noisecf->server_private_key_file.len == 0){
-            ngx_log_error(NGX_LOG_EMERG, c->log, 0,
-                          "server private key file is not set");
+    if (ngx_noise_protocol_needs_local_private_key(
+            &noisecf->noise->protocol, NGX_NSOC_SERVER_ROLE)) {
+        if(noisecf->noise->ctx->private_keys == NULL) {
+            if (noisecf->server_private_key_file.len == 0){
+                ngx_log_error(NGX_LOG_EMERG, c->log, 0,
+                              "server_private_key_file is required for %V",
+                              &noisecf->noise->protocol.name);
 
-            return NGX_ERROR;
+                return NGX_ERROR;
+            }
+
+            private_key = ngx_array_create(cmcf->pool, 1, sizeof(ngx_str_t));
+            key = private_key->elts;
+            key->len = NOISE_PROTOCOL_CURVE25519_KEY_LEN;
+            key->data = ngx_pnalloc(cmcf->pool, NOISE_PROTOCOL_CURVE25519_KEY_LEN);
+            if (ngx_noise_protocol_load_private_key(
+                    noisecf->server_private_key_file.data, key->data,
+                    NOISE_PROTOCOL_CURVE25519_KEY_LEN) != NGX_OK) {
+                ngx_log_error(NGX_LOG_EMERG, c->log, 0,
+                              "unable to open server private key file %s",noisecf->server_private_key_file.data);
+
+                return NGX_ERROR;
+            }
+            private_key->nelts = 1;
+            noisecf->noise->ctx->private_keys = private_key;
+
         }
+    } else if (noisecf->server_private_key_file.len != 0) {
+        ngx_log_error(NGX_LOG_EMERG, c->log, 0,
+                      "server_private_key_file is not used by %V",
+                      &noisecf->noise->protocol.name);
 
-        private_key = ngx_array_create(cmcf->pool, 1, sizeof(ngx_str_t));
-        key = private_key->elts;
-        key->len = NOISE_PROTOCOL_CURVE25519_KEY_LEN;
-        key->data = ngx_pnalloc(cmcf->pool, NOISE_PROTOCOL_CURVE25519_KEY_LEN);
-        if (ngx_noise_protocol_load_private_key(
-                noisecf->server_private_key_file.data, key->data,
-                NOISE_PROTOCOL_CURVE25519_KEY_LEN) != NGX_OK) {
-            ngx_log_error(NGX_LOG_EMERG, c->log, 0,
-                          "unable to open server private key file %s",noisecf->server_private_key_file.data);
-
-            return NGX_ERROR;
-        }
-        private_key->nelts = 1;
-        noisecf->noise->ctx->private_keys = private_key;
-
+        return NGX_ERROR;
     }
 
-    if (noisecf->noise->ctx->public_keys == NULL) {
-        if (noisecf->client_public_key_file.len != 0) {
-            ngx_log_error(NGX_LOG_EMERG, c->log, 0,
-                          "client_public_key_file is not allowed for %V",
-                          &noisecf->noise->protocol.name);
+    if (ngx_noise_protocol_needs_remote_public_key(
+            &noisecf->noise->protocol, NGX_NSOC_SERVER_ROLE)) {
+        if (noisecf->noise->ctx->public_keys == NULL) {
+            if (noisecf->client_public_key_file.len == 0) {
+                ngx_log_error(NGX_LOG_EMERG, c->log, 0,
+                              "client_public_key_file is required for %V",
+                              &noisecf->noise->protocol.name);
 
-            return NGX_ERROR;
+                return NGX_ERROR;
+            }
+
+            public_key = ngx_array_create(cmcf->pool, 1, sizeof(ngx_str_t));
+            key = public_key->elts;
+            key->len = NOISE_PROTOCOL_CURVE25519_KEY_LEN;
+            key->data = ngx_pnalloc(cmcf->pool, NOISE_PROTOCOL_CURVE25519_KEY_LEN);
+            if (ngx_noise_protocol_load_public_key(
+                    noisecf->client_public_key_file.data, key->data,
+                    NOISE_PROTOCOL_CURVE25519_KEY_LEN) != NGX_OK) {
+                ngx_log_error(NGX_LOG_EMERG, c->log, 0,
+                              "unable to open client public key file %s",noisecf->client_public_key_file.data);
+
+                return NGX_ERROR;
+            }
+            public_key->nelts = 1;
+            noisecf->noise->ctx->public_keys = public_key;
         }
+    } else if (noisecf->client_public_key_file.len != 0) {
+        ngx_log_error(NGX_LOG_EMERG, c->log, 0,
+                      "client_public_key_file is not used by %V",
+                      &noisecf->noise->protocol.name);
+
+        return NGX_ERROR;
     }
 
     if (s->server_noise_connection == NULL) {

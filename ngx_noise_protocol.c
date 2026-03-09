@@ -5,10 +5,37 @@
 
 #include "ngx_noise_protocol.h"
 
+typedef struct {
+    const char *name;
+    size_t name_len;
+    uint8_t pattern_id;
+    ngx_flag_t client_needs_local_private_key;
+    ngx_flag_t client_needs_remote_public_key;
+    ngx_flag_t server_needs_local_private_key;
+    ngx_flag_t server_needs_remote_public_key;
+} ngx_noise_pattern_config_t;
+
+static ngx_noise_pattern_config_t ngx_noise_pattern_configs[] = {
+    { "NN", sizeof("NN") - 1, (uint8_t) (NOISE_PATTERN_NN & 0xFF), 0, 0, 0, 0 },
+    { "KN", sizeof("KN") - 1, (uint8_t) (NOISE_PATTERN_KN & 0xFF), 1, 0, 0, 1 },
+    { "NK", sizeof("NK") - 1, (uint8_t) (NOISE_PATTERN_NK & 0xFF), 0, 1, 1, 0 },
+    { "KK", sizeof("KK") - 1, (uint8_t) (NOISE_PATTERN_KK & 0xFF), 1, 1, 1, 1 },
+    { "NX", sizeof("NX") - 1, (uint8_t) (NOISE_PATTERN_NX & 0xFF), 0, 0, 1, 0 },
+    { "KX", sizeof("KX") - 1, (uint8_t) (NOISE_PATTERN_KX & 0xFF), 1, 0, 1, 1 },
+    { "XN", sizeof("XN") - 1, (uint8_t) (NOISE_PATTERN_XN & 0xFF), 1, 0, 0, 0 },
+    { "IN", sizeof("IN") - 1, (uint8_t) (NOISE_PATTERN_IN & 0xFF), 1, 0, 0, 0 },
+    { "XK", sizeof("XK") - 1, (uint8_t) (NOISE_PATTERN_XK & 0xFF), 1, 1, 1, 0 },
+    { "IK", sizeof("IK") - 1, (uint8_t) (NOISE_PATTERN_IK & 0xFF), 1, 1, 1, 0 },
+    { "XX", sizeof("XX") - 1, (uint8_t) (NOISE_PATTERN_XX & 0xFF), 1, 0, 1, 0 },
+    { "IX", sizeof("IX") - 1, (uint8_t) (NOISE_PATTERN_IX & 0xFF), 1, 0, 1, 0 }
+};
+
 static ngx_int_t ngx_noise_protocol_next_token(u_char *end, u_char **cursor,
         ngx_str_t *token);
 static ngx_flag_t ngx_noise_protocol_token_equals(ngx_str_t *token,
         const char *value, size_t value_len);
+static ngx_noise_pattern_config_t *ngx_noise_protocol_find_pattern(
+        ngx_str_t *token);
 
 static ngx_int_t
 ngx_noise_protocol_next_token(u_char *end, u_char **cursor, ngx_str_t *token)
@@ -43,6 +70,25 @@ ngx_noise_protocol_token_equals(ngx_str_t *token, const char *value,
             && ngx_strncmp(token->data, value, value_len) == 0;
 }
 
+static ngx_noise_pattern_config_t *
+ngx_noise_protocol_find_pattern(ngx_str_t *token)
+{
+    ngx_uint_t i;
+
+    for (i = 0;
+            i < sizeof(ngx_noise_pattern_configs)
+                    / sizeof(ngx_noise_pattern_configs[0]);
+            i++) {
+        if (ngx_noise_protocol_token_equals(
+                token, ngx_noise_pattern_configs[i].name,
+                ngx_noise_pattern_configs[i].name_len)) {
+            return &ngx_noise_pattern_configs[i];
+        }
+    }
+
+    return NULL;
+}
+
 ngx_int_t
 ngx_noise_protocol_parse_name(ngx_str_t *protocol_name,
         ngx_noise_protocol_spec_t *spec)
@@ -50,6 +96,7 @@ ngx_noise_protocol_parse_name(ngx_str_t *protocol_name,
     u_char *cursor;
     u_char *end;
     ngx_str_t token;
+    ngx_noise_pattern_config_t *pattern;
 
     ngx_memzero(spec, sizeof(ngx_noise_protocol_spec_t));
 
@@ -73,11 +120,19 @@ ngx_noise_protocol_parse_name(ngx_str_t *protocol_name,
         return NGX_ERROR;
     }
 
-    if (ngx_noise_protocol_token_equals(&token, "NK", sizeof("NK") - 1)) {
-        spec->header.pattern_id = (uint8_t) (NOISE_PATTERN_NK & 0xFF);
-    } else {
+    pattern = ngx_noise_protocol_find_pattern(&token);
+    if (pattern == NULL) {
         return NGX_ERROR;
     }
+    spec->header.pattern_id = pattern->pattern_id;
+    spec->client_needs_local_private_key =
+            pattern->client_needs_local_private_key;
+    spec->client_needs_remote_public_key =
+            pattern->client_needs_remote_public_key;
+    spec->server_needs_local_private_key =
+            pattern->server_needs_local_private_key;
+    spec->server_needs_remote_public_key =
+            pattern->server_needs_remote_public_key;
 
     if (ngx_noise_protocol_next_token(end, &cursor, &token) != NGX_OK
             || !ngx_noise_protocol_token_equals(&token, "25519",
@@ -178,8 +233,12 @@ ngx_flag_t
 ngx_noise_protocol_needs_local_private_key(ngx_noise_protocol_spec_t *spec,
         ngx_noise_role_e noise_role)
 {
-    if (spec->header.pattern_id == (uint8_t) (NOISE_PATTERN_NK & 0xFF)) {
-        return noise_role == NGX_NSOC_SERVER_ROLE;
+    if (noise_role == NGX_NSOC_CLIENT_ROLE) {
+        return spec->client_needs_local_private_key;
+    }
+
+    if (noise_role == NGX_NSOC_SERVER_ROLE) {
+        return spec->server_needs_local_private_key;
     }
 
     return 0;
@@ -189,8 +248,12 @@ ngx_flag_t
 ngx_noise_protocol_needs_remote_public_key(ngx_noise_protocol_spec_t *spec,
         ngx_noise_role_e noise_role)
 {
-    if (spec->header.pattern_id == (uint8_t) (NOISE_PATTERN_NK & 0xFF)) {
-        return noise_role == NGX_NSOC_CLIENT_ROLE;
+    if (noise_role == NGX_NSOC_CLIENT_ROLE) {
+        return spec->client_needs_remote_public_key;
+    }
+
+    if (noise_role == NGX_NSOC_SERVER_ROLE) {
+        return spec->server_needs_remote_public_key;
     }
 
     return 0;

@@ -1559,31 +1559,50 @@ static ngx_int_t ngx_nsoc_proxy_set_noiselink(ngx_conf_t *cf,
         return NGX_ERROR;
     }
 
-    if (pscf->server_public_key_file.len == 0) {
+    if (ngx_noise_protocol_needs_remote_public_key(
+            &pscf->noise->protocol, NGX_NSOC_CLIENT_ROLE)) {
+        if (pscf->server_public_key_file.len == 0) {
+            ngx_log_error(NGX_LOG_EMERG, cf->log, 0,
+                          "server_public_key_file is required for %V",
+                          &pscf->noise->protocol.name);
+
+            return NGX_ERROR;
+        }
+
+        public_key = ngx_array_create(cf->pool, 1, sizeof(ngx_str_t));
+        key = public_key->elts;
+        key->len = NOISE_PROTOCOL_CURVE25519_KEY_LEN;
+        key->data = ngx_pnalloc(cf->pool, NOISE_PROTOCOL_CURVE25519_KEY_LEN);
+
+        if (ngx_noise_protocol_load_public_key(
+                pscf->server_public_key_file.data, key->data,
+                NOISE_PROTOCOL_CURVE25519_KEY_LEN) != NGX_OK) {
+            ngx_log_error(NGX_LOG_EMERG, cf->log, 0,
+                          "unable to open server public key file %s",pscf->server_public_key_file.data);
+
+            return NGX_ERROR;
+        }
+
+        public_key->nelts = 1;
+        pscf->noise->ctx->public_keys = public_key;
+    } else if (pscf->server_public_key_file.len != 0) {
         ngx_log_error(NGX_LOG_EMERG, cf->log, 0,
-                      "server public key file is not set");
+                      "server_public_key_file is not used by %V",
+                      &pscf->noise->protocol.name);
 
         return NGX_ERROR;
     }
 
-    public_key = ngx_array_create(cf->pool, 1, sizeof(ngx_str_t));
-    key = public_key->elts;
-    key->len = NOISE_PROTOCOL_CURVE25519_KEY_LEN;
-    key->data = ngx_pnalloc(cf->pool, NOISE_PROTOCOL_CURVE25519_KEY_LEN);
+    if (ngx_noise_protocol_needs_local_private_key(
+            &pscf->noise->protocol, NGX_NSOC_CLIENT_ROLE)) {
+        if (pscf->client_private_key_file.len == 0) {
+            ngx_log_error(NGX_LOG_EMERG, cf->log, 0,
+                          "client_private_key_file is required for %V",
+                          &pscf->noise->protocol.name);
 
-    if (ngx_noise_protocol_load_public_key(
-            pscf->server_public_key_file.data, key->data,
-            NOISE_PROTOCOL_CURVE25519_KEY_LEN) != NGX_OK) {
-        ngx_log_error(NGX_LOG_EMERG, cf->log, 0,
-                      "unable to open server public key file %s",pscf->server_public_key_file.data);
+            return NGX_ERROR;
+        }
 
-        return NGX_ERROR;
-    }
-
-    public_key->nelts = 1;
-    pscf->noise->ctx->public_keys = public_key;
-
-    if (pscf->client_private_key_file.len != 0) {
         private_key = ngx_array_create(cf->pool, 1, sizeof(ngx_str_t));
         key = private_key->elts;
         key->len = NOISE_PROTOCOL_CURVE25519_KEY_LEN;
@@ -1600,6 +1619,12 @@ static ngx_int_t ngx_nsoc_proxy_set_noiselink(ngx_conf_t *cf,
 
         private_key->nelts = 1;
         pscf->noise->ctx->private_keys = private_key;
+    } else if (pscf->client_private_key_file.len != 0) {
+        ngx_log_error(NGX_LOG_EMERG, cf->log, 0,
+                      "client_private_key_file is not used by %V",
+                      &pscf->noise->protocol.name);
+
+        return NGX_ERROR;
     }
 
     pscf->noise->handshake_timeout = pscf->connect_timeout;

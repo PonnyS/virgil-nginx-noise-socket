@@ -33,7 +33,18 @@ const (
 	noiseHashBLAKE2bID      = 2
 	noiseHashSHA256ID       = 3
 	noiseHashSHA512ID       = 4
+	noisePatternNNID        = 4
 	noisePatternNKID        = 5
+	noisePatternNXID        = 6
+	noisePatternXNID        = 7
+	noisePatternXKID        = 8
+	noisePatternXXID        = 9
+	noisePatternKNID        = 10
+	noisePatternKKID        = 11
+	noisePatternKXID        = 12
+	noisePatternINID        = 13
+	noisePatternIKID        = 14
+	noisePatternIXID        = 15
 	noiseFrameLengthBytes   = 2
 	noiseKeySize            = 32
 	maxPlainFrameSize       = 65517
@@ -50,16 +61,40 @@ type protocolHeader struct {
 }
 
 type noiseProtocolSpec struct {
-	Name   string
-	Header protocolHeader
-	Cipher noise.CipherFunc
-	Hash   noise.HashFunc
+	Name                  string
+	Header                protocolHeader
+	Pattern               noise.HandshakePattern
+	Cipher                noise.CipherFunc
+	Hash                  noise.HashFunc
+	NeedsClientPrivateKey bool
+	NeedsServerPublicKey  bool
 }
 
 type noiseHandshakeConfig struct {
-	Protocol     noiseProtocolSpec
-	PrologueText string
-	ServerPubKey []byte
+	Protocol      noiseProtocolSpec
+	PrologueText  string
+	ClientPrivKey []byte
+	ServerPubKey  []byte
+}
+
+var interactivePatterns = map[string]struct {
+	id                    byte
+	pattern               noise.HandshakePattern
+	needsClientPrivateKey bool
+	needsServerPublicKey  bool
+}{
+	"NN": {id: noisePatternNNID, pattern: noise.HandshakeNN},
+	"KN": {id: noisePatternKNID, pattern: noise.HandshakeKN, needsClientPrivateKey: true},
+	"NK": {id: noisePatternNKID, pattern: noise.HandshakeNK, needsServerPublicKey: true},
+	"KK": {id: noisePatternKKID, pattern: noise.HandshakeKK, needsClientPrivateKey: true, needsServerPublicKey: true},
+	"NX": {id: noisePatternNXID, pattern: noise.HandshakeNX},
+	"KX": {id: noisePatternKXID, pattern: noise.HandshakeKX, needsClientPrivateKey: true},
+	"XN": {id: noisePatternXNID, pattern: noise.HandshakeXN, needsClientPrivateKey: true},
+	"IN": {id: noisePatternINID, pattern: noise.HandshakeIN, needsClientPrivateKey: true},
+	"XK": {id: noisePatternXKID, pattern: noise.HandshakeXK, needsClientPrivateKey: true, needsServerPublicKey: true},
+	"IK": {id: noisePatternIKID, pattern: noise.HandshakeIK, needsClientPrivateKey: true, needsServerPublicKey: true},
+	"XX": {id: noisePatternXXID, pattern: noise.HandshakeXX, needsClientPrivateKey: true},
+	"IX": {id: noisePatternIXID, pattern: noise.HandshakeIX, needsClientPrivateKey: true},
 }
 
 type noiseConn struct {
@@ -205,12 +240,13 @@ func parseNoiseProtocol(protocol string) (noiseProtocolSpec, error) {
 		return noiseProtocolSpec{}, fmt.Errorf("invalid noise protocol: %s", protocol)
 	}
 
-	if parts[1] != "NK" {
-		return noiseProtocolSpec{}, fmt.Errorf("unsupported handshake pattern: %s", parts[1])
-	}
-
 	if parts[2] != "25519" {
 		return noiseProtocolSpec{}, fmt.Errorf("unsupported dh: %s", parts[2])
+	}
+
+	patternSpec, ok := interactivePatterns[parts[1]]
+	if !ok {
+		return noiseProtocolSpec{}, fmt.Errorf("unsupported handshake pattern: %s", parts[1])
 	}
 
 	spec := noiseProtocolSpec{
@@ -218,8 +254,11 @@ func parseNoiseProtocol(protocol string) (noiseProtocolSpec, error) {
 		Header: protocolHeader{
 			VersionID: noiseVersionID,
 			DHID:      noiseDHCurve25519ID,
-			PatternID: noisePatternNKID,
+			PatternID: patternSpec.id,
 		},
+		Pattern:               patternSpec.pattern,
+		NeedsClientPrivateKey: patternSpec.needsClientPrivateKey,
+		NeedsServerPublicKey:  patternSpec.needsServerPublicKey,
 	}
 
 	switch parts[3] {
@@ -253,9 +292,12 @@ func parseNoiseProtocol(protocol string) (noiseProtocolSpec, error) {
 	return spec, nil
 }
 
-// buildInitiatorHandshakeConfig 构造 NK 发起方的握手配置。
-func buildInitiatorHandshakeConfig(spec noiseProtocolSpec, prologueText string, serverPublicKey []byte) (noise.Config, error) {
-	if len(serverPublicKey) != noiseKeySize {
+// buildInitiatorHandshakeConfig 构造发起方的握手配置。
+func buildInitiatorHandshakeConfig(spec noiseProtocolSpec, prologueText string, clientPrivateKey []byte, serverPublicKey []byte) (noise.Config, error) {
+	if spec.NeedsClientPrivateKey && len(clientPrivateKey) != noiseKeySize {
+		return noise.Config{}, fmt.Errorf("invalid client private key size: got %d want %d", len(clientPrivateKey), noiseKeySize)
+	}
+	if spec.NeedsServerPublicKey && len(serverPublicKey) != noiseKeySize {
 		return noise.Config{}, fmt.Errorf("invalid server public key size: got %d want %d", len(serverPublicKey), noiseKeySize)
 	}
 
@@ -264,23 +306,36 @@ func buildInitiatorHandshakeConfig(spec noiseProtocolSpec, prologueText string, 
 		return noise.Config{}, err
 	}
 
-	serverPublicKeyCopy := make([]byte, len(serverPublicKey))
-	copy(serverPublicKeyCopy, serverPublicKey)
+	var clientStaticKeypair noise.DHKey
+	if len(clientPrivateKey) != 0 {
+		clientStaticKeypair, err = buildX25519Keypair(clientPrivateKey)
+		if err != nil {
+			return noise.Config{}, err
+		}
+	}
+
+	var serverPublicKeyCopy []byte
+	if len(serverPublicKey) != 0 {
+		serverPublicKeyCopy = make([]byte, len(serverPublicKey))
+		copy(serverPublicKeyCopy, serverPublicKey)
+	}
 
 	return noise.Config{
-		CipherSuite: noise.NewCipherSuite(noise.DH25519, spec.Cipher, spec.Hash),
-		Pattern:     noise.HandshakeNK,
-		Initiator:   true,
-		PeerStatic:  serverPublicKeyCopy,
-		Prologue:    prologue,
+		CipherSuite:   noise.NewCipherSuite(noise.DH25519, spec.Cipher, spec.Hash),
+		Pattern:       spec.Pattern,
+		Initiator:     true,
+		StaticKeypair: clientStaticKeypair,
+		PeerStatic:    serverPublicKeyCopy,
+		Prologue:      prologue,
 	}, nil
 }
 
-// dialNoiseConn 建立 TCP 连接并完成 Noise NK 握手，返回可直接读写明文的连接。
+// dialNoiseConn 建立 TCP 连接并完成 initiator 侧 Noise 握手，返回可直接读写明文的连接。
 func dialNoiseConn(addr string, config noiseHandshakeConfig, timeout time.Duration) (*noiseConn, error) {
 	handshakeConfig, err := buildInitiatorHandshakeConfig(
 		config.Protocol,
 		config.PrologueText,
+		config.ClientPrivKey,
 		config.ServerPubKey,
 	)
 	if err != nil {
@@ -320,35 +375,50 @@ func dialNoiseConn(addr string, config noiseHandshakeConfig, timeout time.Durati
 	}, nil
 }
 
-// performNoiseHandshake 执行 NK 的 1->2 两次握手消息交换，并产出双向 CipherState。
+// performNoiseHandshake 执行 initiator 侧握手消息交换，并产出双向 CipherState。
 func performNoiseHandshake(conn net.Conn, state *noise.HandshakeState, header protocolHeader) (*noise.CipherState, *noise.CipherState, error) {
-	firstHandshakeMsg, _, _, err := state.WriteMessage(nil, nil)
+	handshakeMsg, sendCipher, recvCipher, err := state.WriteMessage(nil, nil)
 	if err != nil {
 		return nil, nil, fmt.Errorf("write handshake message #1 failed: %w", err)
 	}
 
 	firstNegotiationData := buildFirstNegotiationData(header)
-	if err := writeHandshakeFrame(conn, firstNegotiationData, firstHandshakeMsg); err != nil {
+	if err := writeHandshakeFrame(conn, firstNegotiationData, handshakeMsg); err != nil {
 		return nil, nil, fmt.Errorf("send handshake message #1 failed: %w", err)
 	}
-
-	secondNegotiationData, secondHandshakeMsg, err := readHandshakeFrame(conn)
-	if err != nil {
-		return nil, nil, fmt.Errorf("read handshake message #2 failed: %w", err)
-	}
-	if err := validateSecondNegotiationData(secondNegotiationData); err != nil {
-		return nil, nil, err
-	}
-	_, sendCipher, recvCipher, err := state.ReadMessage(nil, secondHandshakeMsg)
-	if err != nil {
-		return nil, nil, fmt.Errorf("read handshake payload #2 failed: %w", err)
+	if sendCipher != nil && recvCipher != nil {
+		return sendCipher, recvCipher, nil
 	}
 
-	if sendCipher == nil || recvCipher == nil {
-		return nil, nil, errors.New("handshake finished but cipher states are nil")
-	}
+	for handshakeMsgNum := 2; ; handshakeMsgNum++ {
+		negotiationData, nextHandshakeMsg, err := readHandshakeFrame(conn)
+		if err != nil {
+			return nil, nil, fmt.Errorf("read handshake message #%d failed: %w", handshakeMsgNum, err)
+		}
+		if err := validateSecondNegotiationData(negotiationData); err != nil {
+			return nil, nil, err
+		}
 
-	return sendCipher, recvCipher, nil
+		_, sendCipher, recvCipher, err = state.ReadMessage(nil, nextHandshakeMsg)
+		if err != nil {
+			return nil, nil, fmt.Errorf("read handshake payload #%d failed: %w", handshakeMsgNum, err)
+		}
+		if sendCipher != nil && recvCipher != nil {
+			return sendCipher, recvCipher, nil
+		}
+
+		handshakeMsgNum++
+		handshakeMsg, sendCipher, recvCipher, err = state.WriteMessage(nil, nil)
+		if err != nil {
+			return nil, nil, fmt.Errorf("write handshake message #%d failed: %w", handshakeMsgNum, err)
+		}
+		if err := writeHandshakeFrame(conn, nil, handshakeMsg); err != nil {
+			return nil, nil, fmt.Errorf("send handshake message #%d failed: %w", handshakeMsgNum, err)
+		}
+		if sendCipher != nil && recvCipher != nil {
+			return sendCipher, recvCipher, nil
+		}
+	}
 }
 
 // doHTTPGetOverNoise 使用 Noise 连接发送一个 HTTP GET 请求并返回响应。
@@ -481,8 +551,40 @@ func deriveX25519PublicKey(privateKey []byte) ([]byte, error) {
 	return publicKeyCopy, nil
 }
 
-// resolveServerPublicKey 解析服务端静态公钥，优先使用显式公钥文件，其次允许从 demo 私钥推导。
-func resolveServerPublicKey(publicKeyPath string, demoPrivateKeyPath string) ([]byte, error) {
+// buildX25519Keypair 基于 32 字节 X25519 私钥构造 Noise 需要的完整 keypair。
+func buildX25519Keypair(privateKey []byte) (noise.DHKey, error) {
+	publicKey, err := deriveX25519PublicKey(privateKey)
+	if err != nil {
+		return noise.DHKey{}, err
+	}
+
+	privateKeyCopy := make([]byte, len(privateKey))
+	copy(privateKeyCopy, privateKey)
+
+	return noise.DHKey{
+		Private: privateKeyCopy,
+		Public:  publicKey,
+	}, nil
+}
+
+// resolveClientPrivateKey 仅在模式需要 initiator static 时加载客户端私钥。
+func resolveClientPrivateKey(privateKeyPath string, required bool) ([]byte, error) {
+	if privateKeyPath == "" {
+		if required {
+			return nil, errors.New("client private key is required")
+		}
+		return nil, nil
+	}
+
+	return loadRawX25519Key(privateKeyPath)
+}
+
+// resolveServerPublicKey 仅在模式需要 responder static 时解析服务端静态公钥。
+func resolveServerPublicKey(publicKeyPath string, demoPrivateKeyPath string, required bool) ([]byte, error) {
+	if !required {
+		return nil, nil
+	}
+
 	if publicKeyPath != "" {
 		return loadRawX25519Key(publicKeyPath)
 	}
@@ -760,8 +862,9 @@ func main() {
 	host := flag.String("host", "localhost", "HTTP/WS Host 头")
 	protocolName := flag.String("protocol", defaultNoiseProtocol, "Noise 协议串，例如 Noise_NK_25519_AESGCM_SHA256")
 	prologueText := flag.String("prologue", defaultNoisePrologue, "Noise prologue 文本")
-	serverPublicKeyPath := flag.String("server-pub", "", "服务端静态公钥文件路径（32字节二进制）")
-	serverDemoPrivateKeyPath := flag.String("server-private-demo", defaultServerPrivateKeyPath, "仅本地 demo 使用：从服务端私钥推导静态公钥")
+	clientPrivateKeyPath := flag.String("client-priv", "", "客户端静态私钥文件路径（32字节二进制，仅在模式需要 initiator static 时使用）")
+	serverPublicKeyPath := flag.String("server-pub", "", "服务端静态公钥文件路径（32字节二进制，仅在模式需要 responder static 预共享时使用）")
+	serverDemoPrivateKeyPath := flag.String("server-private-demo", defaultServerPrivateKeyPath, "仅本地 demo 使用：当模式需要 responder static 预共享时，从服务端私钥推导静态公钥")
 	timeout := flag.Duration("timeout", 15*time.Second, "每个请求超时时间")
 	wsMessage := flag.String("ws-message", "hello over noise", "发送到 /ws/echo 的文本消息")
 	flag.Parse()
@@ -772,16 +875,27 @@ func main() {
 		os.Exit(1)
 	}
 
-	serverPublicKey, err := resolveServerPublicKey(*serverPublicKeyPath, *serverDemoPrivateKeyPath)
+	clientPrivateKey, err := resolveClientPrivateKey(*clientPrivateKeyPath, protocol.NeedsClientPrivateKey)
+	if err != nil {
+		fmt.Fprintf(os.Stderr, "加载客户端私钥失败: %v\n", err)
+		os.Exit(1)
+	}
+
+	serverPublicKey, err := resolveServerPublicKey(
+		*serverPublicKeyPath,
+		*serverDemoPrivateKeyPath,
+		protocol.NeedsServerPublicKey,
+	)
 	if err != nil {
 		fmt.Fprintf(os.Stderr, "加载服务端公钥失败: %v\n", err)
 		os.Exit(1)
 	}
 
 	handshakeConfig := noiseHandshakeConfig{
-		Protocol:     protocol,
-		PrologueText: *prologueText,
-		ServerPubKey: serverPublicKey,
+		Protocol:      protocol,
+		PrologueText:  *prologueText,
+		ClientPrivKey: clientPrivateKey,
+		ServerPubKey:  serverPublicKey,
 	}
 
 	fmt.Printf("目标 Noise 服务: %s\n", *addr)

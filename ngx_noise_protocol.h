@@ -52,6 +52,10 @@ typedef struct noise_handshake_third_hdr_s {
 typedef struct ngx_noise_protocol_spec_s {
     ngx_str_t name;
     noise_handshake_first_hdr_t header;
+    ngx_flag_t client_needs_local_private_key;
+    ngx_flag_t client_needs_remote_public_key;
+    ngx_flag_t server_needs_local_private_key;
+    ngx_flag_t server_needs_remote_public_key;
 } ngx_noise_protocol_spec_t;
 
 typedef struct noise_protocol_conn_s {
