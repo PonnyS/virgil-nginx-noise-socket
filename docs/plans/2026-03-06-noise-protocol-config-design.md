@@ -113,7 +113,7 @@ server_public_key_file /etc/noise/server_pub_25519;
 - `XK`、`IK`：代理需要 `client_private_key_file` 和 `server_public_key_file`；服务端需要 `server_private_key_file`
 - `XX`、`IX`：代理需要 `client_private_key_file`；服务端需要 `server_private_key_file`
 
-本次选择“未使用的 key 指令直接报错”，不再默默接受多余配置。
+本次选择“仅校验必填 key，未使用的 key 配置直接忽略”，避免协议切换时因为历史配置残留导致握手前失败。
 
 ## 实现方案
 
@@ -144,11 +144,12 @@ server_public_key_file /etc/noise/server_pub_25519;
 - 解析协议
 - 构造 prologue
 - 按 initiator 规则加载 `client_private_key_file` / `server_public_key_file`
+- 当前模式不需要的额外 key 配置直接忽略
 
 服务端运行时初始化：
 
 - 按 responder 规则加载 `server_private_key_file` / `client_public_key_file`
-- 不需要 static 的模式不再强制读文件
+- 不需要 static 的模式不再强制读文件，多余 key 配置直接忽略
 
 ### 4. Go 示例客户端改成模式驱动
 

@@ -90,7 +90,7 @@ Expected: 无新增语法错误；若环境缺 nginx 头文件，记录真实失
 
 - initiator 需要 remote static 时要求 `server_public_key_file`
 - initiator 需要 local static 时要求 `client_private_key_file`
-- 多余 key 指令直接报错
+- 多余 key 配置直接忽略
 
 **Step 2: 修改服务端**
 
@@ -98,7 +98,7 @@ Expected: 无新增语法错误；若环境缺 nginx 头文件，记录真实失
 
 - responder 需要 local static 时要求 `server_private_key_file`
 - responder 需要 remote static 时要求 `client_public_key_file`
-- 多余 key 指令直接报错
+- 多余 key 配置直接忽略
 
 **Step 3: 保持握手循环不扩分支**
 

@@ -146,6 +146,7 @@ Context: 	noise_socket, server
 
 Specifies a file with the secret key in the format of the simple sequence of bytes for the given noise responder (server). 
 This directive is required only when the configured responder pattern needs a local static key, for example `NK`、`KK`、`NX`、`KX`、`XK`、`IK`、`XX`、`IX`.
+若当前模式不需要该指令，nginx 会忽略该配置，不会报错。
 
 ```nginx
 Syntax: 	server_public_key_file file;
@@ -154,6 +155,7 @@ Context: 	noise_socket, server
 ```
 
 Specifies a file with the public key for the proxied noise responder. This directive is required only when the configured initiator pattern needs a remote static key, for example `NK`、`KK`、`XK`、`IK`.
+若当前模式不需要该指令，nginx 会忽略该配置，不会报错。
 
 ```nginx
 Syntax: 	client_private_key_file file;
@@ -162,6 +164,7 @@ Context: 	noise_socket, server
 ```
 
 Specifies a file with the secret key in the format of the simple sequence of bytes for the given noise initiator(client). This directive is required only when the configured initiator pattern needs a local static key, for example `KN`、`KK`、`KX`、`XN`、`IN`、`XK`、`IK`、`XX`、`IX`.
+若当前模式不需要该指令，nginx 会忽略该配置，不会报错。
 
 ```nginx
 Syntax: 	client_public_key_file file;
@@ -170,6 +173,7 @@ Context: 	noise_socket, server
 ```
 
 Specifies a file with the public key for the remote noise initiator(client). This directive is required only when the configured responder pattern needs a remote static key, for example `KN`、`KK`、`KX`.
+若当前模式不需要该指令，nginx 会忽略该配置，不会报错。
 
 ```nginx
 Syntax: 	noise_protocol protocol;

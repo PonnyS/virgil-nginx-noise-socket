@@ -143,12 +143,6 @@ static ngx_int_t ngx_nsoc_noiseserver_handler(ngx_nsoc_session_t *s)
             noisecf->noise->ctx->private_keys = private_key;
 
         }
-    } else if (noisecf->server_private_key_file.len != 0) {
-        ngx_log_error(NGX_LOG_EMERG, c->log, 0,
-                      "server_private_key_file is not used by %V",
-                      &noisecf->noise->protocol.name);
-
-        return NGX_ERROR;
     }
 
     if (ngx_noise_protocol_needs_remote_public_key(
@@ -177,12 +171,6 @@ static ngx_int_t ngx_nsoc_noiseserver_handler(ngx_nsoc_session_t *s)
             public_key->nelts = 1;
             noisecf->noise->ctx->public_keys = public_key;
         }
-    } else if (noisecf->client_public_key_file.len != 0) {
-        ngx_log_error(NGX_LOG_EMERG, c->log, 0,
-                      "client_public_key_file is not used by %V",
-                      &noisecf->noise->protocol.name);
-
-        return NGX_ERROR;
     }
 
     if (s->server_noise_connection == NULL) {

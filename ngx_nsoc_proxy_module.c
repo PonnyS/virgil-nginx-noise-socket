@@ -1585,12 +1585,6 @@ static ngx_int_t ngx_nsoc_proxy_set_noiselink(ngx_conf_t *cf,
 
         public_key->nelts = 1;
         pscf->noise->ctx->public_keys = public_key;
-    } else if (pscf->server_public_key_file.len != 0) {
-        ngx_log_error(NGX_LOG_EMERG, cf->log, 0,
-                      "server_public_key_file is not used by %V",
-                      &pscf->noise->protocol.name);
-
-        return NGX_ERROR;
     }
 
     if (ngx_noise_protocol_needs_local_private_key(
@@ -1619,12 +1613,6 @@ static ngx_int_t ngx_nsoc_proxy_set_noiselink(ngx_conf_t *cf,
 
         private_key->nelts = 1;
         pscf->noise->ctx->private_keys = private_key;
-    } else if (pscf->client_private_key_file.len != 0) {
-        ngx_log_error(NGX_LOG_EMERG, cf->log, 0,
-                      "client_private_key_file is not used by %V",
-                      &pscf->noise->protocol.name);
-
-        return NGX_ERROR;
     }
 
     pscf->noise->handshake_timeout = pscf->connect_timeout;
