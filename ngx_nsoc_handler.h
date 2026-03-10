@@ -30,7 +30,7 @@
 
 #define NGX_NSOC_LEN_FIELD_SIZE 2
 
-#define NGX_NSOC_VERSION_ID swapw(1)
+#define NGX_NSOC_VERSION_ID NOISE_PROTOCOL_VERSION_ID
 
 #define NGX_NSOC_BUFSIZE  NOISE_PROTOCOL_PAYLOAD_SIZE + NOISE_PROTOCOL_MAC_DATA_SIZE + 2*NGX_NSOC_LEN_FIELD_SIZE
 
@@ -43,9 +43,11 @@ typedef enum {
 typedef struct ngx_noise_s {
         NOISE_CTX *ctx;
         ngx_log_t *log;
-        noise_prologue_data_t prologue;
         size_t buffer_size;
         ngx_msec_t handshake_timeout;
+        ngx_noise_protocol_spec_t protocol;
+        ngx_str_t prologue_text;
+        ngx_str_t prologue;
 } ngx_noise_t;
 
 typedef struct ngx_noise_connection_s {
@@ -53,7 +55,8 @@ typedef struct ngx_noise_connection_s {
         ngx_connection_t *connection;
         noise_protocol_conn_t noise_connection;
         NOISE_CTX *noise_ctx;
-        noise_prologue_data_t *prologue;
+        ngx_noise_protocol_spec_t *protocol;
+        ngx_str_t *prologue;
 
         ngx_noise_handshake_phases_e handshake_phase;
         ngx_noise_role_e noise_role;
@@ -97,4 +100,3 @@ ngx_chain_t * ngx_nsoc_send_chain(ngx_connection_t *c, ngx_chain_t *in,
         off_t limit);
 ssize_t ngx_nsoc_write(ngx_connection_t *c, u_char *data, size_t size);
 #endif
-

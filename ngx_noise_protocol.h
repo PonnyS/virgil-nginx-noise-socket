@@ -47,20 +47,16 @@ typedef struct noise_handshake_second_hdr_s {
 typedef struct noise_handshake_third_hdr_s {
 	uint16_t version_id;
 }noise_handshake_third_hdr_t;
-
-typedef struct noise_prologue_data_s {
-	uint8_t strPrologue[16];
-	uint16_t header_len;
-	noise_handshake_first_hdr_t header;
-}noise_prologue_data_t;
-
-typedef struct noise_prologue_fallback_data_t {
-    uint8_t strPrologue[15];
-    noise_prologue_data_t first_msg;
-    uint16_t header_len;
-    noise_handshake_first_hdr_t header;
-}noise_prologue_fallback_data_t;
 #pragma pack (pop)
+
+typedef struct ngx_noise_protocol_spec_s {
+    ngx_str_t name;
+    noise_handshake_first_hdr_t header;
+    ngx_flag_t client_needs_local_private_key;
+    ngx_flag_t client_needs_remote_public_key;
+    ngx_flag_t server_needs_local_private_key;
+    ngx_flag_t server_needs_remote_public_key;
+} ngx_noise_protocol_spec_t;
 
 typedef struct noise_protocol_conn_s {
         NoiseHandshakeState *NoiseHandshakeObj;
@@ -72,8 +68,24 @@ typedef struct noise_protocol_conn_s {
         NoiseProtocolId protocol_id;
 } noise_protocol_conn_t;
 
+#define NOISE_PROTOCOL_VERSION_ID swapw(1)
+
+ngx_int_t ngx_noise_protocol_parse_name(ngx_str_t *protocol_name,
+        ngx_noise_protocol_spec_t *spec);
+ngx_int_t ngx_noise_protocol_init_prologue(ngx_pool_t *pool,
+        ngx_str_t *prologue_text, ngx_noise_protocol_spec_t *spec,
+        ngx_str_t *prologue);
+ngx_int_t ngx_noise_protocol_match_header(ngx_noise_protocol_spec_t *spec,
+        noise_handshake_first_hdr_t *header);
+void ngx_noise_protocol_write_negotiation(u_char *dst,
+        ngx_noise_protocol_spec_t *spec);
+ngx_flag_t ngx_noise_protocol_needs_local_private_key(
+        ngx_noise_protocol_spec_t *spec, ngx_noise_role_e noise_role);
+ngx_flag_t ngx_noise_protocol_needs_remote_public_key(
+        ngx_noise_protocol_spec_t *spec, ngx_noise_role_e noise_role);
 ngx_int_t ngx_noise_protocol_init_handshake(NOISE_CTX *noise_ctx,
-        noise_protocol_conn_t *noise_conn, noise_prologue_data_t *prologue_data, ngx_noise_role_e noise_role);
+        noise_protocol_conn_t *noise_conn, ngx_noise_protocol_spec_t *spec,
+        ngx_str_t *prologue, ngx_noise_role_e noise_role);
 ngx_int_t ngx_noise_protocol_load_private_key(const unsigned char *filename,
         uint8_t *key, size_t len);
 ngx_int_t ngx_noise_protocol_load_public_key(const unsigned char *filename, uint8_t *key,
