@@ -49,6 +49,14 @@ const (
 	noiseKeySize            = 32
 	maxPlainFrameSize       = 65517
 
+	noiseHandshakeStatusOK                     = 0x00
+	noiseHandshakeStatusVersionMismatch        = 0x01
+	noiseHandshakeStatusNegotiationMismatch    = 0x02
+	noiseHandshakeStatusMalformedNegotiation   = 0x03
+	noiseHandshakeStatusMalformedHandshake     = 0x04
+	noiseHandshakeStatusPeerVerificationFailed = 0x05
+	noiseHandshakeStatusInternalError          = 0x06
+
 	websocketGUID = "258EAFA5-E914-47DA-95CA-C5AB0DC85B11"
 )
 
@@ -631,23 +639,31 @@ func validateSecondNegotiationData(data []byte) error {
 	}
 
 	if len(data) != 3 {
-		return fmt.Errorf("unexpected handshake negotiation data length: %d", len(data))
+		return fmt.Errorf("malformed handshake negotiation: unexpected data length %d", len(data))
 	}
 
 	version := binary.BigEndian.Uint16(data[:2])
 	status := data[2]
 
 	if version != noiseVersionID {
-		return fmt.Errorf("unexpected handshake version: %d", version)
+		return fmt.Errorf("malformed handshake negotiation: unexpected version %d", version)
 	}
 
 	switch status {
-	case 0x00:
-		return nil
-	case 0x01:
-		return errors.New("server returned fallback status (0x01), unsupported")
-	case 0xFF:
-		return errors.New("server returned error status (0xFF)")
+	case noiseHandshakeStatusOK:
+		return errors.New("malformed handshake negotiation: unexpected OK status frame")
+	case noiseHandshakeStatusVersionMismatch:
+		return errors.New("server rejected handshake: VERSION_MISMATCH")
+	case noiseHandshakeStatusNegotiationMismatch:
+		return errors.New("server rejected handshake: NEGOTIATION_MISMATCH")
+	case noiseHandshakeStatusMalformedNegotiation:
+		return errors.New("server rejected handshake: MALFORMED_NEGOTIATION")
+	case noiseHandshakeStatusMalformedHandshake:
+		return errors.New("server rejected handshake: MALFORMED_HANDSHAKE")
+	case noiseHandshakeStatusPeerVerificationFailed:
+		return errors.New("server rejected handshake: PEER_VERIFICATION_FAILED")
+	case noiseHandshakeStatusInternalError:
+		return errors.New("server rejected handshake: INTERNAL_ERROR")
 	default:
 		return fmt.Errorf("unexpected handshake status: 0x%02X", status)
 	}

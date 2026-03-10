@@ -202,22 +202,22 @@ ngx_noise_protocol_init_prologue(ngx_pool_t *pool, ngx_str_t *prologue_text,
     return NGX_OK;
 }
 
-ngx_int_t
+ngx_uint_t
 ngx_noise_protocol_match_header(ngx_noise_protocol_spec_t *spec,
         noise_handshake_first_hdr_t *header)
 {
     if (header->version_id != spec->header.version_id) {
-        return NGX_ERROR;
+        return NGX_NSOC_HANDSHAKE_STATUS_VERSION_MISMATCH;
     }
 
     if (header->dh_id != spec->header.dh_id
             || header->cipher_id != spec->header.cipher_id
             || header->hash_id != spec->header.hash_id
             || header->pattern_id != spec->header.pattern_id) {
-        return NGX_ERROR;
+        return NGX_NSOC_HANDSHAKE_STATUS_NEGOTIATION_MISMATCH;
     }
 
-    return NGX_OK;
+    return NGX_NSOC_HANDSHAKE_STATUS_OK;
 }
 
 void
@@ -439,6 +439,28 @@ ngx_int_t ngx_noise_protocol_load_public_key(const unsigned char *filename,
     }
     fclose(file);
     return NGX_OK;
+}
+
+const char *ngx_noise_protocol_handshake_status_text(ngx_uint_t status)
+{
+    switch (status) {
+        case NGX_NSOC_HANDSHAKE_STATUS_OK:
+            return "OK";
+        case NGX_NSOC_HANDSHAKE_STATUS_VERSION_MISMATCH:
+            return "VERSION_MISMATCH";
+        case NGX_NSOC_HANDSHAKE_STATUS_NEGOTIATION_MISMATCH:
+            return "NEGOTIATION_MISMATCH";
+        case NGX_NSOC_HANDSHAKE_STATUS_MALFORMED_NEGOTIATION:
+            return "MALFORMED_NEGOTIATION";
+        case NGX_NSOC_HANDSHAKE_STATUS_MALFORMED_HANDSHAKE:
+            return "MALFORMED_HANDSHAKE";
+        case NGX_NSOC_HANDSHAKE_STATUS_PEER_VERIFICATION_FAILED:
+            return "PEER_VERIFICATION_FAILED";
+        case NGX_NSOC_HANDSHAKE_STATUS_INTERNAL_ERROR:
+            return "INTERNAL_ERROR";
+        default:
+            return "UNKNOWN";
+    }
 }
 
 void ngx_noise_protocol_log_error(ngx_int_t err, char* strObjError,

@@ -13,18 +13,17 @@
 #define NGX_NSOC_BUFFER   1
 #define NGX_NSOC_CLIENT   2
 #define NGX_NSOC_SIZE_UNSET -1
+#define NGX_NSOC_ACTION_WRITE_REJECT -2
 
 #define NGX_NSOC_1MSG 0
 #define NGX_NSOC_2MSG_OK 1
-#define NGX_NSOC_2MSG_FB 2
-#define NGX_NSOC_2MSG_ERR 3
-#define NGX_NSOC_3MSG 4
+#define NGX_NSOC_2MSG_REJECTED 2
+#define NGX_NSOC_3MSG 3
 
 #define NGX_NSOC_1MSG_NEG_DATA_SIZE 6
 
 #define NGX_NSOC_2MSG_NEG_DATA_OK_SIZE 0
-#define NGX_NSOC_2MSG_NEG_DATA_FB_SIZE 3
-#define NGX_NSOC_2MSG_NEG_DATA_ERR_SIZE 3
+#define NGX_NSOC_2MSG_NEG_DATA_REJECTED_SIZE 3
 
 #define NGX_NSOC_3MSG_NEG_DATA_SIZE 0
 
@@ -61,6 +60,7 @@ typedef struct ngx_noise_connection_s {
         ngx_noise_handshake_phases_e handshake_phase;
         ngx_noise_role_e noise_role;
         ngx_int_t msg_num;
+        ngx_uint_t handshake_status;
 
         ngx_int_t last;
         ngx_buf_t *buf;

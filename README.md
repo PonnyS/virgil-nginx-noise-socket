@@ -229,6 +229,19 @@ Context: 	noise_socket, server
 ```
 Specifies a timeout for the `Noise Protocol` handshake to complete.
 
+### 握手错误状态
+
+当 responder 能在握手早期安全拒绝请求时，会在第二条协商数据里返回一个 3 字节状态头。当前约定的 `status` 如下：
+
+* `0x01` `VERSION_MISMATCH`
+* `0x02` `NEGOTIATION_MISMATCH`
+* `0x03` `MALFORMED_NEGOTIATION`
+* `0x04` `MALFORMED_HANDSHAKE`
+* `0x05` `PEER_VERIFICATION_FAILED`
+* `0x06` `INTERNAL_ERROR`
+
+客户端只应消费这些稳定类别，不应依赖 nginx 内部日志文案。像缺少 key 文件、文件打不开、权限错误这类部署/配置问题会在配置加载阶段直接失败，并只记录在 nginx 日志中，不会透传给客户端。
+
 #### The module  supports also following directives:
 
 `proxy_pass`, `proxy_bind`, `proxy_connect_timeout`, `proxy_timeout`, `proxy_upload_rate`, `proxy_download_rate`, `proxy_responses`, `proxy_next_upstream`, `proxy_next_upstream_tries`, `proxy_next_upstream_timeout`.<br />

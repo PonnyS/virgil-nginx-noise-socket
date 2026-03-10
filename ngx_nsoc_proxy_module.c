@@ -73,6 +73,7 @@ static char *ngx_nsoc_proxy_bind(ngx_conf_t *cf, ngx_command_t *cmd, void *conf)
 
 static void ngx_nsoc_proxy_noise_init_connection(ngx_nsoc_session_t *s);
 static void ngx_nsoc_proxy_noise_handshake(ngx_connection_t *pc);
+static void ngx_nsoc_proxy_log_noise_handshake_error(ngx_nsoc_session_t *s);
 static ngx_int_t ngx_nsoc_proxy_set_noiselink(ngx_conf_t *cf,
         ngx_nsoc_proxy_srv_conf_t *pscf);
 
@@ -717,6 +718,23 @@ static void ngx_nsoc_proxy_init_upstream(ngx_nsoc_session_t *s)
 }
 
 /*noise*/
+static void ngx_nsoc_proxy_log_noise_handshake_error(ngx_nsoc_session_t *s)
+{
+    if (s->client_noise_connection != NULL
+            && s->client_noise_connection->handshake_status
+                    != NGX_NSOC_HANDSHAKE_STATUS_OK) {
+        ngx_log_error(NGX_LOG_ERR, s->connection->log, 0,
+                "NOISE client handshaking failed: %s",
+                ngx_noise_protocol_handshake_status_text(
+                        s->client_noise_connection->handshake_status));
+        return;
+    }
+
+    ngx_log_error(
+            NGX_LOG_ERR, s->connection->log, 0,
+            "NOISE error client handshaking");
+}
+
 static void ngx_nsoc_proxy_noise_init_connection(ngx_nsoc_session_t *s)
 {
     ngx_nsoc_upstream_t *u;
@@ -746,11 +764,6 @@ static void ngx_nsoc_proxy_noise_init_connection(ngx_nsoc_session_t *s)
 
         s->client_noise_connection->handler = ngx_nsoc_proxy_noise_handshake;
         return;
-    }
-    if (rc == NGX_ERROR) {
-        ngx_log_error(
-                NGX_LOG_ERR, s->connection->log, 0,
-                "NOISE error client handshaking");
     }
 
     ngx_nsoc_proxy_noise_handshake(pc);
@@ -796,6 +809,7 @@ static void ngx_nsoc_proxy_noise_handshake(ngx_connection_t *pc)
     }
 
 //failed:
+    ngx_nsoc_proxy_log_noise_handshake_error(s);
 
     ngx_nsoc_proxy_next_upstream(s);
 }

@@ -30,6 +30,16 @@ typedef enum {
     NGX_NSOC_SERVER_ROLE
 } ngx_noise_role_e;
 
+typedef enum {
+    NGX_NSOC_HANDSHAKE_STATUS_OK = 0x00,
+    NGX_NSOC_HANDSHAKE_STATUS_VERSION_MISMATCH = 0x01,
+    NGX_NSOC_HANDSHAKE_STATUS_NEGOTIATION_MISMATCH = 0x02,
+    NGX_NSOC_HANDSHAKE_STATUS_MALFORMED_NEGOTIATION = 0x03,
+    NGX_NSOC_HANDSHAKE_STATUS_MALFORMED_HANDSHAKE = 0x04,
+    NGX_NSOC_HANDSHAKE_STATUS_PEER_VERIFICATION_FAILED = 0x05,
+    NGX_NSOC_HANDSHAKE_STATUS_INTERNAL_ERROR = 0x06
+} ngx_nsoc_handshake_status_e;
+
 #pragma pack(push, 1)
 typedef struct noise_handshake_first_hdr_s {
 	uint16_t version_id;
@@ -75,7 +85,7 @@ ngx_int_t ngx_noise_protocol_parse_name(ngx_str_t *protocol_name,
 ngx_int_t ngx_noise_protocol_init_prologue(ngx_pool_t *pool,
         ngx_str_t *prologue_text, ngx_noise_protocol_spec_t *spec,
         ngx_str_t *prologue);
-ngx_int_t ngx_noise_protocol_match_header(ngx_noise_protocol_spec_t *spec,
+ngx_uint_t ngx_noise_protocol_match_header(ngx_noise_protocol_spec_t *spec,
         noise_handshake_first_hdr_t *header);
 void ngx_noise_protocol_write_negotiation(u_char *dst,
         ngx_noise_protocol_spec_t *spec);
@@ -90,6 +100,7 @@ ngx_int_t ngx_noise_protocol_load_private_key(const unsigned char *filename,
         uint8_t *key, size_t len);
 ngx_int_t ngx_noise_protocol_load_public_key(const unsigned char *filename, uint8_t *key,
         size_t len);
+const char *ngx_noise_protocol_handshake_status_text(ngx_uint_t status);
 void ngx_noise_protocol_log_error(ngx_int_t err, char* strError, ngx_log_t *log,
         ngx_uint_t log_level);
 #endif
