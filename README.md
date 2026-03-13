@@ -5,7 +5,7 @@ Nginx module that implements Noise Socket Protocol by using Virgil Security infr
 
  - Own context in the Nginx server providing a functionality of TCP of a proxy.
  - Protection of traffic by means of [Noise Protocol](http://noiseprotocol.org/).
- - At the moment only `Noise_XX_25519_AESGCM_BLAKE2b` noise protocol pattern is implemented.
+ - Supports configuring the Noise protocol suite and prologue per server/proxy endpoint.
 
 ## Building of Nginx with the virgil-nginx-noise-socket module:
 
@@ -139,7 +139,7 @@ Default: 	—
 Context: 	noise_socket, server
 ```
 
-Specifies a file with the secret key in the format of the simple sequence of bytes for the given noise responder (server). 
+指定 Noise responder（server）使用的静态私钥文件，文件内容为原始字节序列。只有当前配置的握手模式需要 responder 静态密钥对时，该指令才是必填项。
 
 ```nginx
 Syntax: 	client_private_key_file file;
@@ -147,7 +147,23 @@ Default: 	—
 Context: 	noise_socket, server
 ```
 
-Specifies a file with the secret key in the format of the simple sequence of bytes for the given noise initiator(client). 
+指定 Noise initiator（client）使用的静态私钥文件，文件内容为原始字节序列。只有当前配置的握手模式需要 initiator 静态密钥对时，该指令才是必填项。
+
+```nginx
+Syntax: 	noise_protocol protocol;
+Default: 	noise_protocol Noise_XX_25519_AESGCM_BLAKE2b;
+Context: 	noise_socket, server
+```
+
+指定 responder 唯一接受的 Noise suite。当前模块支持所有基础握手模式，但不支持 `fallback` 和 `psk` 变体。DH/cipher/hash 当前可配置为：`25519`、`448`、`ChaChaPoly`、`AESGCM`、`BLAKE2s`、`BLAKE2b`、`SHA256`、`SHA512`。
+
+```nginx
+Syntax: 	noise_prologue string;
+Default: 	noise_prologue NoiseSocketInit1;
+Context: 	noise_socket, server
+```
+
+Specifies the prologue text used by the responder. The string is no longer limited to 16 bytes and is included into the Noise prologue together with the negotiation header.
 
 ```nginx
 Syntax: 	proxy_noise on | off;
@@ -155,6 +171,24 @@ Default: 	proxy_noise off;
 Context: 	noise_socket, server
 ```
 Enables the noise socket protocol for connections to a proxied server. 
+
+```nginx
+Syntax: 	proxy_noise_protocol protocol;
+Default: 	proxy_noise_protocol Noise_XX_25519_AESGCM_BLAKE2b;
+Context: 	noise_socket, server
+```
+
+Specifies the Noise suite used by the initiator when `proxy_noise on` is enabled.
+
+当所选握手模式需要 initiator 静态密钥对时，`client_private_key_file` 必填；当所选握手模式需要预置 responder 静态公钥时，`server_public_key_file` 必填。
+
+```nginx
+Syntax: 	proxy_noise_prologue string;
+Default: 	proxy_noise_prologue NoiseSocketInit1;
+Context: 	noise_socket, server
+```
+
+Specifies the prologue text used by the initiator when `proxy_noise on` is enabled.
 
 ```nginx
 Syntax: 	block_buffer_size size;

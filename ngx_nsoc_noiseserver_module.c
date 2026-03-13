@@ -45,6 +45,20 @@ static ngx_command_t ngx_nsoc_noiseserver_commands[] =
     offsetof(ngx_nsoc_noiseserver_conf_t, client_public_key_file),
     NULL },
 
+  { ngx_string("noise_protocol"),
+    NGX_NSOC_MAIN_CONF | NGX_NSOC_SRV_CONF | NGX_CONF_TAKE1,
+    ngx_conf_set_str_slot,
+    NGX_NSOC_SRV_CONF_OFFSET,
+    offsetof(ngx_nsoc_noiseserver_conf_t, noise_protocol),
+    NULL },
+
+  { ngx_string("noise_prologue"),
+    NGX_NSOC_MAIN_CONF | NGX_NSOC_SRV_CONF | NGX_CONF_TAKE1,
+    ngx_conf_set_str_slot,
+    NGX_NSOC_SRV_CONF_OFFSET,
+    offsetof(ngx_nsoc_noiseserver_conf_t, noise_prologue),
+    NULL },
+
 	ngx_null_command
 };
 
@@ -84,6 +98,8 @@ static ngx_int_t ngx_nsoc_noiseserver_handler(ngx_nsoc_session_t *s)
     ngx_array_t *private_key, *public_key;
     ngx_str_t *key;
     ngx_nsoc_core_main_conf_t *cmcf;
+    ngx_flag_t need_local_keypair, need_remote_public_key;
+    size_t key_len;
 
     if (!s->noise_on) {
         return NGX_OK;
@@ -93,22 +109,25 @@ static ngx_int_t ngx_nsoc_noiseserver_handler(ngx_nsoc_session_t *s)
     noisecf = ngx_nsoc_get_module_srv_conf(s, ngx_nsoc_noiseserver_module);
 
     cmcf = ngx_nsoc_get_module_main_conf(s, ngx_nsoc_core_module);
+    key_len = noisecf->noise->protocol.dh_key_len;
 
-    if(noisecf->noise->ctx->private_keys == NULL) {
-        if (noisecf->server_private_key_file.len == 0){
-            ngx_log_error(NGX_LOG_EMERG, c->log, 0,
-                          "server private key file is not set");
+    if (ngx_noise_protocol_requires_local_keypair(&noisecf->noise->protocol,
+            NGX_NSOC_SERVER_ROLE, &need_local_keypair) != NGX_OK
+            || ngx_noise_protocol_requires_remote_public_key(
+                    &noisecf->noise->protocol, NGX_NSOC_SERVER_ROLE,
+                    &need_remote_public_key) != NGX_OK) {
+        return NGX_ERROR;
+    }
 
-            return NGX_ERROR;
-        }
-
+    if (noisecf->noise->ctx->private_keys == NULL
+            && noisecf->server_private_key_file.len != 0) {
         private_key = ngx_array_create(cmcf->pool, 1, sizeof(ngx_str_t));
         key = private_key->elts;
-        key->len = NOISE_PROTOCOL_CURVE25519_KEY_LEN;
-        key->data = ngx_pnalloc(cmcf->pool, NOISE_PROTOCOL_CURVE25519_KEY_LEN);
+        key->len = key_len;
+        key->data = ngx_pnalloc(cmcf->pool, key_len);
         if (ngx_noise_protocol_load_private_key(
                 noisecf->server_private_key_file.data, key->data,
-                NOISE_PROTOCOL_CURVE25519_KEY_LEN) != NGX_OK) {
+                key_len) != NGX_OK) {
             ngx_log_error(NGX_LOG_EMERG, c->log, 0,
                           "unable to open server private key file %s",noisecf->server_private_key_file.data);
 
@@ -116,28 +135,37 @@ static ngx_int_t ngx_nsoc_noiseserver_handler(ngx_nsoc_session_t *s)
         }
         private_key->nelts = 1;
         noisecf->noise->ctx->private_keys = private_key;
-
     }
 
-    if (noisecf->noise->ctx->public_keys == NULL) {
-		if (noisecf->client_public_key_file.len != 0) {
-			public_key = ngx_array_create(cmcf->pool, 1, sizeof(ngx_str_t));
-			key = public_key->elts;
-			key->len = NOISE_PROTOCOL_CURVE25519_KEY_LEN;
-			key->data = ngx_pnalloc(cmcf->pool,
-					NOISE_PROTOCOL_CURVE25519_KEY_LEN);
-			if (ngx_noise_protocol_load_public_key(
-					noisecf->client_public_key_file.data, key->data,
-					NOISE_PROTOCOL_CURVE25519_KEY_LEN) != NGX_OK) {
-	            ngx_log_error(NGX_LOG_EMERG, c->log, 0,
-	                          "unable to open client public key file %s",noisecf->client_public_key_file.data);
+    if (noisecf->noise->ctx->public_keys == NULL
+            && noisecf->client_public_key_file.len != 0) {
+        public_key = ngx_array_create(cmcf->pool, 1, sizeof(ngx_str_t));
+        key = public_key->elts;
+        key->len = key_len;
+        key->data = ngx_pnalloc(cmcf->pool, key_len);
+        if (ngx_noise_protocol_load_public_key(
+                noisecf->client_public_key_file.data, key->data,
+                key_len) != NGX_OK) {
+            ngx_log_error(NGX_LOG_EMERG, c->log, 0,
+                          "unable to open client public key file %s",noisecf->client_public_key_file.data);
 
-	            return NGX_ERROR;
-			}
-			public_key->nelts = 1;
-			noisecf->noise->ctx->public_keys = public_key;
-		}
-	}
+            return NGX_ERROR;
+        }
+        public_key->nelts = 1;
+        noisecf->noise->ctx->public_keys = public_key;
+    }
+
+    if (need_local_keypair && noisecf->noise->ctx->private_keys == NULL) {
+        ngx_log_error(NGX_LOG_EMERG, c->log, 0,
+                      "server private key file is not set");
+        return NGX_ERROR;
+    }
+
+    if (need_remote_public_key && noisecf->noise->ctx->public_keys == NULL) {
+        ngx_log_error(NGX_LOG_EMERG, c->log, 0,
+                      "client public key file is not set");
+        return NGX_ERROR;
+    }
 
     if (s->server_noise_connection == NULL) {
         c->log->action = "NOISE handshaking";
@@ -245,6 +273,7 @@ ngx_nsoc_noiseserver_merge_conf(ngx_conf_t *cf, void *parent, void *child)
     ngx_nsoc_noiseserver_conf_t *conf = child;
     ngx_nsoc_core_srv_conf_t *cscf;
     ngx_pool_cleanup_t *cln;
+    ngx_flag_t need_local_keypair, need_remote_public_key;
 
     ngx_conf_merge_msec_value(
             conf->handshake_timeout, prev->handshake_timeout, 60000);
@@ -253,6 +282,12 @@ ngx_nsoc_noiseserver_merge_conf(ngx_conf_t *cf, void *parent, void *child)
             conf->server_private_key_file, prev->server_private_key_file, "");
     ngx_conf_merge_str_value(
             conf->client_public_key_file, prev->client_public_key_file, "");
+    ngx_conf_merge_str_value(
+            conf->noise_protocol, prev->noise_protocol,
+            NOISE_PROTOCOL_DEFAULT_NAME);
+    ngx_conf_merge_str_value(
+            conf->noise_prologue, prev->noise_prologue,
+            NOISE_PROTOCOL_DEFAULT_PROLOGUE);
 
     conf->noise = ngx_pcalloc(cf->pool, sizeof(ngx_noise_t));
     if (conf->noise == NULL) {
@@ -261,8 +296,34 @@ ngx_nsoc_noiseserver_merge_conf(ngx_conf_t *cf, void *parent, void *child)
 
     conf->noise->log = cf->log;
     conf->noise->handshake_timeout = conf->handshake_timeout;
-    memcpy( conf->noise->prologue.strPrologue,"NoiseSocketInit1",16);
-    conf->noise->prologue.header_len = swapw(NGX_NSOC_1MSG_NEG_DATA_SIZE);
+    if (ngx_noise_protocol_parse(&conf->noise->protocol, &conf->noise_protocol,
+            &conf->noise_prologue) != NGX_OK) {
+        ngx_log_error(NGX_LOG_EMERG, cf->log, 0,
+                "invalid noise_protocol %V", &conf->noise_protocol);
+        return NGX_CONF_ERROR;
+    }
+
+    if (ngx_noise_protocol_requires_local_keypair(&conf->noise->protocol,
+            NGX_NSOC_SERVER_ROLE, &need_local_keypair) != NGX_OK
+            || ngx_noise_protocol_requires_remote_public_key(
+                    &conf->noise->protocol, NGX_NSOC_SERVER_ROLE,
+                    &need_remote_public_key) != NGX_OK) {
+        ngx_log_error(NGX_LOG_EMERG, cf->log, 0,
+                      "invalid noise_protocol capability %V", &conf->noise_protocol);
+        return NGX_CONF_ERROR;
+    }
+
+    if (need_local_keypair && conf->server_private_key_file.len == 0) {
+        ngx_log_error(NGX_LOG_EMERG, cf->log, 0,
+                      "server private key file is required for %V", &conf->noise_protocol);
+        return NGX_CONF_ERROR;
+    }
+
+    if (need_remote_public_key && conf->client_public_key_file.len == 0) {
+        ngx_log_error(NGX_LOG_EMERG, cf->log, 0,
+                      "client public key file is required for %V", &conf->noise_protocol);
+        return NGX_CONF_ERROR;
+    }
 
     cscf = ngx_nsoc_conf_get_module_srv_conf(cf, ngx_nsoc_core_module);
 
